@@ -1,5 +1,3 @@
-const axios = require('axios')
-
 class AirtableAuth {
   constructor() {
     this.pat = process.env.AIRTABLE_PAT
@@ -23,12 +21,12 @@ class AirtableAuth {
 
   async validateToken() {
     try {
-      const response = await axios.get('https://api.airtable.com/v0/meta/whoami', {
+      const response = await fetch('https://api.airtable.com/v0/meta/whoami', {
         headers: {
           Authorization: `Bearer ${this.pat}`,
         },
       })
-      return response.status === 200
+      return response.ok
     } catch (error) {
       return false
     }

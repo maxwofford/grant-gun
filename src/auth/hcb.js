@@ -1,5 +1,3 @@
-const express = require('express')
-const axios = require('axios')
 const open = require('open')
 
 class HCBAuth {
@@ -14,8 +12,57 @@ class HCBAuth {
   async authenticate() {
     // Always start fresh OAuth flow - no token storage
     return new Promise((resolve, reject) => {
-      const app = express()
-      this.server = app.listen(3000)
+      this.server = Bun.serve({
+        port: 3000,
+        fetch: async (req) => {
+          const url = new URL(req.url)
+
+          if (url.pathname === '/') {
+            try {
+              const code = url.searchParams.get('code')
+              if (!code) {
+                return new Response(
+                  '<h1>❌ Authentication failed</h1><p>No authorization code received</p>',
+                  { headers: { 'Content-Type': 'text/html' } }
+                )
+              }
+
+              // Exchange code for token
+              const tokenResponse = await fetch(`${this.baseURL}/oauth/token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  client_id: this.clientId,
+                  client_secret: this.clientSecret,
+                  redirect_uri: this.redirectUri,
+                  code: code,
+                  grant_type: 'authorization_code',
+                }),
+              })
+
+              const token = await tokenResponse.json()
+              // Don't save token - always authenticate fresh
+
+              this.server.stop()
+              resolve(token)
+
+              return new Response(
+                '<h1>✅ HCB authentication successful!</h1><p>You can close this window.</p>',
+                { headers: { 'Content-Type': 'text/html' } }
+              )
+            } catch (error) {
+              this.server.stop()
+              reject(error)
+
+              return new Response(`<h1>❌ Authentication failed</h1><p>${error.message}</p>`, {
+                headers: { 'Content-Type': 'text/html' },
+              })
+            }
+          }
+
+          return new Response('Not found', { status: 404 })
+        },
+      })
 
       // Generate authorization URL
       const authUrl =
@@ -24,35 +71,6 @@ class HCBAuth {
         `redirect_uri=${encodeURIComponent(this.redirectUri)}&` +
         `response_type=code&` +
         `scope=read`
-
-      app.get('/', async (req, res) => {
-        try {
-          const { code } = req.query
-          if (!code) {
-            throw new Error('No authorization code received')
-          }
-
-          // Exchange code for token
-          const tokenResponse = await axios.post(`${this.baseURL}/oauth/token`, {
-            client_id: this.clientId,
-            client_secret: this.clientSecret,
-            redirect_uri: this.redirectUri,
-            code: code,
-            grant_type: 'authorization_code',
-          })
-
-          const token = tokenResponse.data
-          // Don't save token - always authenticate fresh
-
-          res.send('<h1>✅ HCB authentication successful!</h1><p>You can close this window.</p>')
-          this.server.close()
-          resolve(token)
-        } catch (error) {
-          res.send(`<h1>❌ Authentication failed</h1><p>${error.message}</p>`)
-          this.server.close()
-          reject(error)
-        }
-      })
 
       // Open browser
       console.log('Opening browser for HCB authentication...')
@@ -66,7 +84,7 @@ class HCBAuth {
 
       // Timeout after 5 minutes
       setTimeout(() => {
-        this.server.close()
+        this.server.stop()
         reject(new Error('Authentication timeout'))
       }, 300000)
     })
@@ -74,12 +92,12 @@ class HCBAuth {
 
   async validateToken(token) {
     try {
-      const response = await axios.get(`${this.baseURL}/organizations`, {
+      const response = await fetch(`${this.baseURL}/organizations`, {
         headers: {
           Authorization: `Bearer ${token.access_token}`,
         },
       })
-      return response.status === 200
+      return response.ok
     } catch (error) {
       return false
     }
@@ -87,7 +105,7 @@ class HCBAuth {
 
   closeServer() {
     if (this.server) {
-      this.server.close()
+      this.server.stop()
       this.server = null
     }
   }

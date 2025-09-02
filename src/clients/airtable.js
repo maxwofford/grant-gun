@@ -1,5 +1,3 @@
-const axios = require('axios')
-
 class AirtableClient {
   constructor(token) {
     this.token = token
@@ -20,9 +18,19 @@ class AirtableClient {
       tableId = tableId || defaultTableId
 
       const url = `${this.baseURL}/${baseId}/${tableId}`
-      const response = await axios.get(url, { headers: this.headers })
+      const response = await fetch(url, { headers: this.headers })
 
-      const records = response.data.records || []
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(
+          `Airtable API error: ${response.status} - ${
+            errorData.error?.message || response.statusText
+          }`
+        )
+      }
+
+      const data = await response.json()
+      const records = data.records || []
 
       // Transform records to a more usable format
       const transformedRecords = records.map((record) => ({
@@ -33,11 +41,6 @@ class AirtableClient {
 
       return transformedRecords
     } catch (error) {
-      if (error.response) {
-        throw new Error(
-          `Airtable API error: ${error.response.status} - ${error.response.data.error?.message || error.response.statusText}`
-        )
-      }
       throw new Error(`Failed to fetch Airtable data: ${error.message}`)
     }
   }

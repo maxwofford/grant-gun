@@ -1,5 +1,3 @@
-const axios = require('axios')
-
 class HCBClient {
   constructor(token) {
     this.token = token
@@ -20,12 +18,17 @@ class HCBClient {
         params.append('type', type)
       }
 
-      const response = await axios.get(`${url}?${params.toString()}`, { headers: this.headers })
-      return response.data
+      const response = await fetch(`${url}?${params.toString()}`, {
+        headers: this.headers,
+      })
+
+      if (!response.ok) {
+        throw new Error(`${response.status} - ${response.statusText}`)
+      }
+
+      return await response.json()
     } catch (error) {
-      throw new Error(
-        `Failed to get org transactions: ${error.response?.status} - ${error.response?.statusText || error.message}`
-      )
+      throw new Error(`Failed to get org transactions: ${error.message}`)
     }
   }
 
