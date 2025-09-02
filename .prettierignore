@@ -1,0 +1,6 @@
+node_modules/
+.git/
+*.log
+.env
+.hcb-token
+bun.lockb
