@@ -40,6 +40,7 @@ bun test                   # Run tests (when implemented)
 - Use environment variables for configuration
 - Follow modular architecture with separation of concerns
 - Include user confirmation for destructive operations (transfers)
+- Use bun commands for package management (`bun add`, `bun remove`) instead of manually editing package.json
 
 ## Environment Variables Required
 
@@ -49,12 +50,4 @@ bun test                   # Run tests (when implemented)
 
 ## OAuth Redirect URIs
 
-- HCB: `http://localhost:3000/callback/hcb` (runs on port 3001 to avoid conflicts)
-
-## Business Logic Customization
-
-Primary customization points in `src/utils/calculator.js`:
-
-- `calculateGrantTotal()` - Grant amount calculation from Airtable
-- `determineTransferAmount()` - Transfer amount business logic
-- Field name mapping for different Airtable schemas
+- HCB: `http://localhost:3000`
