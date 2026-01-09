@@ -8,7 +8,7 @@ class AirtableClient {
     }
   }
 
-  async fetchData(baseId = null, tableId = null) {
+  async fetchData(baseId = null, tableId = null, filter = null) {
     try {
       // Use hardcoded base and table IDs
       const defaultBaseId = 'app3A5kJwYqxMLOgh'
@@ -17,23 +17,51 @@ class AirtableClient {
       baseId = baseId || defaultBaseId
       tableId = tableId || defaultTableId
 
-      const url = `${this.baseURL}/${baseId}/${tableId}`
-      const response = await fetch(url, { headers: this.headers })
+      let allRecords = []
+      let offset = null
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(
-          `Airtable API error: ${response.status} - ${
-            errorData.error?.message || response.statusText
-          }`
-        )
-      }
+      do {
+        let url = `${this.baseURL}/${baseId}/${tableId}`
+        const params = new URLSearchParams()
+        
+        // Add filter if provided
+        if (filter) {
+          params.append('filterByFormula', filter)
+        }
+        
+        // Add offset for pagination
+        if (offset) {
+          params.append('offset', offset)
+        }
+        
+        if (params.toString()) {
+          url += `?${params.toString()}`
+        }
+        
+        const response = await fetch(url, { headers: this.headers })
 
-      const data = await response.json()
-      const records = data.records || []
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(
+            `Airtable API error: ${response.status} - ${
+              errorData.error?.message || response.statusText
+            }`
+          )
+        }
+
+        const data = await response.json()
+        const records = data.records || []
+        
+        // Add records to our collection
+        allRecords = allRecords.concat(records)
+        
+        // Check if there are more pages
+        offset = data.offset
+        
+      } while (offset)
 
       // Transform records to a more usable format
-      const transformedRecords = records.map((record) => ({
+      const transformedRecords = allRecords.map((record) => ({
         id: record.id,
         createdTime: record.createdTime,
         fields: record.fields,
