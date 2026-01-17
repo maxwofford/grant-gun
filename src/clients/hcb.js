@@ -109,9 +109,7 @@ class HCBClient {
       // Exclude transactions with 'no-grant-calc' label
       const hqDisbursements = uniqueTransactions.filter(
         (tx) =>
-          (tx.transfer?.from?.slug === hqSlug ||
-            tx.transfer?.from?.id === hqOrgId ||
-            (tx.memo && tx.memo.includes('HQ'))) &&
+          (tx.transfer?.from?.slug === hqSlug || tx.transfer?.from?.id === hqOrgId) &&
           (!tx.labels || !tx.labels.some((label) => label.name === 'no-grant-calc'))
       )
 
