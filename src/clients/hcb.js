@@ -12,64 +12,21 @@ class HCBClient {
     try {
       const url = `${this.baseURL}/organizations/${eventId}/transactions`
       const batchSize = 1000
+      const allTransactions = []
+      let cursor = null
+      let batchNum = 0
 
-      // First request to get total_count
-      const firstParams = new URLSearchParams()
-      firstParams.append('limit', batchSize.toString())
-      firstParams.append('offset', '0')
-      if (type) {
-        firstParams.append('type', type)
-      }
+      console.log(`   Fetching transactions with cursor-based pagination...`)
 
-      console.log(`   Fetching first batch to determine total count...`)
-
-      const firstResponse = await fetch(`${url}?${firstParams.toString()}`, {
-        headers: this.headers,
-      })
-
-      if (!firstResponse.ok) {
-        throw new Error(`${firstResponse.status} - ${firstResponse.statusText}`)
-      }
-
-      const firstData = await firstResponse.json()
-      
-      // Extract transactions and total count
-      let firstTransactions = []
-      let totalCount = 0
-      
-      if (firstData && firstData.data && Array.isArray(firstData.data)) {
-        firstTransactions = firstData.data
-        totalCount = firstData.total_count || firstTransactions.length
-      } else if (Array.isArray(firstData)) {
-        firstTransactions = firstData
-        totalCount = firstTransactions.length
-      } else if (firstData && firstData.transactions && Array.isArray(firstData.transactions)) {
-        firstTransactions = firstData.transactions
-        totalCount = firstTransactions.length
-      }
-
-      console.log(`   Total count: ${totalCount}, fetching remaining batches in parallel...`)
-
-      // If we got everything in the first batch, return early
-      if (totalCount <= batchSize) {
-        return firstTransactions
-      }
-
-      // Calculate remaining batches to fetch in parallel
-      const remainingBatches = []
-      for (let offset = batchSize; offset < totalCount; offset += batchSize) {
-        remainingBatches.push(offset)
-      }
-
-      console.log(`   Fetching ${remainingBatches.length} additional batches in parallel...`)
-
-      // Fetch all remaining batches in parallel
-      const batchPromises = remainingBatches.map(async (offset) => {
+      while (true) {
+        batchNum++
         const params = new URLSearchParams()
         params.append('limit', batchSize.toString())
-        params.append('offset', offset.toString())
         if (type) {
           params.append('type', type)
+        }
+        if (cursor) {
+          params.append('after', cursor)
         }
 
         const response = await fetch(`${url}?${params.toString()}`, {
@@ -81,19 +38,27 @@ class HCBClient {
         }
 
         const data = await response.json()
-        
-        if (data && data.data && Array.isArray(data.data)) {
-          return data.data
-        } else if (Array.isArray(data)) {
-          return data
-        } else if (data && data.transactions && Array.isArray(data.transactions)) {
-          return data.transactions
-        }
-        return []
-      })
 
-      const remainingResults = await Promise.all(batchPromises)
-      const allTransactions = [firstTransactions, ...remainingResults].flat()
+        let transactions = []
+        if (data && data.data && Array.isArray(data.data)) {
+          transactions = data.data
+        } else if (Array.isArray(data)) {
+          transactions = data
+        } else if (data && data.transactions && Array.isArray(data.transactions)) {
+          transactions = data.transactions
+        }
+
+        allTransactions.push(...transactions)
+        console.log(`   Batch ${batchNum}: fetched ${transactions.length} (total: ${allTransactions.length})`)
+
+        // Stop if no more pages
+        if (data.has_more === false) {
+          break
+        }
+
+        // Use the last transaction ID as cursor for next batch
+        cursor = transactions[transactions.length - 1].id
+      }
 
       console.log(`   ✓ Fetched ${allTransactions.length} total transactions`)
 
@@ -122,10 +87,11 @@ class HCBClient {
 
   async getTotalDisbursementsFromHQ(eventId) {
     try {
-      const hqEventId = 183 // HQ org event ID
+      const hqOrgId = 'org_a29uVj' // HQ org ID
+      const hqSlug = 'hq' // HQ org slug
 
-      // Get ALL disbursements for this org
-      const transactions = await this.getOrgTransactions(eventId, 'disbursement')
+      // Get ALL transactions for this org (no type filter - we filter for HQ transfers below)
+      const transactions = await this.getOrgTransactions(eventId, null)
 
       // Deduplicate by transaction ID/code using hashmap to prevent race conditions
       const txMap = new Map()
@@ -135,12 +101,13 @@ class HCBClient {
 
       const uniqueTransactions = Array.from(txMap.values())
 
-      // Filter for disbursements from HQ (event_id 183)
+      // Filter for disbursements from HQ
+      // Check nested transfer.from.slug or transfer.from.id
       // Exclude transactions with 'no-grant-calc' label
       const hqDisbursements = uniqueTransactions.filter(
         (tx) =>
-          (tx.from_event_id === hqEventId ||
-          tx.from_organization_id === hqEventId ||
+          (tx.transfer?.from?.slug === hqSlug ||
+          tx.transfer?.from?.id === hqOrgId ||
           (tx.memo && tx.memo.includes('HQ'))) &&
           (!tx.labels || !tx.labels.some(label => label.name === 'no-grant-calc'))
       )
