@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 
 const { Command } = require('commander')
-const chalk = require('chalk')
 const inquirer = require('inquirer')
 const open = require('open')
 const { AirtableAuth } = require('./src/auth/airtable')
 const { HCBAuth } = require('./src/auth/hcb')
 const { AirtableClient } = require('./src/clients/airtable')
 const { HCBClient } = require('./src/clients/hcb')
+const c = require('./src/lib/colors')
 
 const program = new Command()
 
@@ -17,72 +17,97 @@ async function openTransferTab(eventId, transferAmount, programName) {
   const amountInCents = (transferAmount * 100).toFixed(0) // Convert to cents, no decimals
   const url = `https://hcb.hackclub.com/disbursements/new?source_event_id=hq&event_id=${eventId}&amount=${amountInCents}&message=${encodeURIComponent(message)}`
 
-  console.log(chalk.blue(`   🌐 Opening disbursement tab: ${url}`))
+  console.log(c.blue(`   🌐 Opening disbursement tab: ${url}`))
 
   try {
     await open(url)
-    console.log(chalk.green(`   ✅ Opened disbursement page for ${programName}`))
+    console.log(c.green(`   ✅ Opened disbursement page for ${programName}`))
   } catch (error) {
-    console.log(chalk.red(`   ❌ Failed to open browser: ${error.message}`))
-    console.log(chalk.blue(`   Please manually visit: ${url}`))
+    console.log(c.red(`   ❌ Failed to open browser: ${error.message}`))
+    console.log(c.blue(`   Please manually visit: ${url}`))
   }
 }
 
+function renderProgressBar(completed, total, width = 30) {
+  const percent = total > 0 ? completed / total : 0
+  const filled = Math.round(width * percent)
+  const empty = width - filled
+  const bar = '█'.repeat(filled) + '░'.repeat(empty)
+  return `[${bar}] ${completed}/${total}`
+}
+
 async function processProgramPayouts(programs, hcbClient) {
-  console.log(chalk.blue('💰 Program Payout Process'))
-  console.log(chalk.gray('Review each program for payout approval. Use ? for help.\n'))
+  console.log(c.blue('💰 Program Payout Process'))
+  console.log(c.gray('Review each program for payout approval. Use ? for help.\n'))
 
   const approved = []
   const rejected = []
   let currentIndex = 0
-  
-  // Collect all program data with HCB info first
-  console.log(chalk.yellow('💰 Querying HCB transfer history for programs...'))
-  const programData = []
-  
-  for (const program of programs) {
-    const programName = program.fields['Name'] || 'Unknown Program'
-    const weightedTotal = program.fields['Weighted–Total'] || 0
-    const targetAmount = weightedTotal * 85 // Each weighted grant is $85
-    const hcbUrl = program.fields['HCB']
-    
-    let org = null
-    let disbursementData = { totalAmountCents: 0, disbursementCount: 0 }
-    let error = null
-    
-    if (hcbUrl) {
-      try {
-        org = await hcbClient.getOrgFromBudgetUrl(hcbUrl)
-        
-        if (org.eventId) {
-          disbursementData = await hcbClient.getTotalDisbursementsFromHQ(org.eventId)
-        }
-      } catch (err) {
-        error = err.message
-      }
-    }
-    
-    const targetAmountCents = Math.round(targetAmount * 100)
-    const rawTransferAmountCents = targetAmountCents - disbursementData.totalAmountCents
-    const transferAmountCents = Math.max(0, rawTransferAmountCents)
-    const transferAmount = transferAmountCents / 100
-    const overDisbursedAmount = rawTransferAmountCents < 0 ? Math.abs(rawTransferAmountCents) / 100 : 0
 
-    programData.push({
-      program,
-      programName,
-      weightedTotal,
-      targetAmount,
-      hcbUrl,
-      org,
-      disbursementData,
-      transferAmount,
-      overDisbursedAmount,
-      error
-    })
+  // Collect all program data with HCB info in parallel
+  console.log(c.yellow('💰 Querying HCB transfer history for programs...'))
+
+  let completedCount = 0
+  const total = programs.length
+
+  // Update progress bar
+  const updateProgress = () => {
+    process.stdout.write(`\r${c.cyan(renderProgressBar(completedCount, total))} ${c.gray('Fetching HCB data...')}`)
   }
-  
-  console.log(chalk.green(`✅ Transfer history query complete\n`))
+
+  updateProgress()
+
+  // Process all programs in parallel
+  const programData = await Promise.all(
+    programs.map(async (program) => {
+      const programName = program.fields['Name'] || 'Unknown Program'
+      const weightedTotal = program.fields['Weighted–Total'] || 0
+      const targetAmount = weightedTotal * 85 // Each weighted grant is $85
+      const hcbUrl = program.fields['HCB']
+
+      let org = null
+      let disbursementData = { totalAmountCents: 0, disbursementCount: 0 }
+      let error = null
+
+      if (hcbUrl) {
+        try {
+          org = await hcbClient.getOrgFromBudgetUrl(hcbUrl)
+
+          if (org.eventId) {
+            disbursementData = await hcbClient.getTotalDisbursementsFromHQ(org.eventId, { quiet: true })
+          }
+        } catch (err) {
+          error = err.message
+        }
+      }
+
+      const targetAmountCents = Math.round(targetAmount * 100)
+      const rawTransferAmountCents = targetAmountCents - disbursementData.totalAmountCents
+      const transferAmountCents = Math.max(0, rawTransferAmountCents)
+      const transferAmount = transferAmountCents / 100
+      const overDisbursedAmount = rawTransferAmountCents < 0 ? Math.abs(rawTransferAmountCents) / 100 : 0
+
+      completedCount++
+      updateProgress()
+
+      return {
+        program,
+        programName,
+        weightedTotal,
+        targetAmount,
+        hcbUrl,
+        org,
+        disbursementData,
+        transferAmount,
+        overDisbursedAmount,
+        error
+      }
+    })
+  )
+
+  // Clear progress line and show completion
+  process.stdout.write('\r' + ' '.repeat(80) + '\r')
+  console.log(c.green(`✅ Transfer history query complete (${total} programs)\n`))
 
   while (currentIndex < programData.length) {
     const data = programData[currentIndex]
@@ -91,14 +116,14 @@ async function processProgramPayouts(programs, hcbClient) {
     if (data.transferAmount <= 0 || !data.org || !data.org.eventId) {
       if (data.transferAmount <= 0) {
         if (data.overDisbursedAmount > 0) {
-          console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Over-disbursed by $${data.overDisbursedAmount.toFixed(2)}`))
+          console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Over-disbursed by $${data.overDisbursedAmount.toFixed(2)}`))
         } else {
-          console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Already fully disbursed`))
+          console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Already fully disbursed`))
         }
       } else if (!data.hcbUrl) {
-        console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB URL`))
+        console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB URL`))
       } else if (!data.org || !data.org.eventId) {
-        console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB Event ID`))
+        console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB Event ID`))
       }
       rejected.push(data)
       currentIndex++
@@ -106,17 +131,17 @@ async function processProgramPayouts(programs, hcbClient) {
     }
 
     // Display program information
-    console.log(chalk.cyan(`\n[${currentIndex + 1}/${programData.length}] ${data.programName}`))
+    console.log(c.cyan(`\n[${currentIndex + 1}/${programData.length}] ${data.programName}`))
     console.log(`   Weighted Total: ${data.weightedTotal}`)
     console.log(`   Target Amount: $${data.targetAmount.toFixed(2)}`)
     console.log(`   Total Disbursements from HQ: $${(data.disbursementData.totalAmountCents / 100).toFixed(2)} (${data.disbursementData.disbursementCount} disbursements)`)
-    console.log(`   ${chalk.bold('Transfer Amount: $' + data.transferAmount.toFixed(2))}`)
+    console.log(`   ${c.bold('Transfer Amount: $' + data.transferAmount.toFixed(2))}`)
     console.log(`   HCB URL: ${data.hcbUrl || 'Not found'}`)
     
     if (data.org) {
       console.log(`   HCB Event ID: ${data.org.eventId}`)
     } else if (data.error) {
-      console.log(chalk.red(`   HCB Error: ${data.error}`))
+      console.log(c.red(`   HCB Error: ${data.error}`))
     }
 
     const { action } = await inquirer.prompt([
@@ -139,7 +164,7 @@ async function processProgramPayouts(programs, hcbClient) {
     switch (choice) {
       case '?':
       case 'help':
-        console.log(chalk.blue('\nAvailable commands:'))
+        console.log(c.blue('\nAvailable commands:'))
         console.log('  y, yes     - Approve this program payout and continue')
         console.log('  n, no      - Reject this program payout and continue')
         console.log('  a, all     - Approve this program and all remaining programs')
@@ -151,9 +176,9 @@ async function processProgramPayouts(programs, hcbClient) {
       case 'yes':
         approved.push(data)
         if (data.transferAmount > 0) {
-          console.log(chalk.green(`✅ Approved: Will transfer $${data.transferAmount.toFixed(2)} to ${data.programName}`))
+          console.log(c.green(`✅ Approved: Will transfer $${data.transferAmount.toFixed(2)} to ${data.programName}`))
         } else {
-          console.log(chalk.green(`✅ Approved: No transfer needed for ${data.programName}`))
+          console.log(c.green(`✅ Approved: No transfer needed for ${data.programName}`))
         }
         currentIndex++
         break
@@ -161,7 +186,7 @@ async function processProgramPayouts(programs, hcbClient) {
       case 'n':
       case 'no':
         rejected.push(data)
-        console.log(chalk.red(`❌ Rejected: ${data.programName}`))
+        console.log(c.red(`❌ Rejected: ${data.programName}`))
         currentIndex++
         break
 
@@ -172,9 +197,9 @@ async function processProgramPayouts(programs, hcbClient) {
           const remainingData = programData[i]
           approved.push(remainingData)
           if (remainingData.transferAmount > 0) {
-            console.log(chalk.green(`✅ Approved: Will transfer $${remainingData.transferAmount.toFixed(2)} to ${remainingData.programName}`))
+            console.log(c.green(`✅ Approved: Will transfer $${remainingData.transferAmount.toFixed(2)} to ${remainingData.programName}`))
           } else {
-            console.log(chalk.green(`✅ Approved: No transfer needed for ${remainingData.programName}`))
+            console.log(c.green(`✅ Approved: No transfer needed for ${remainingData.programName}`))
           }
         }
         currentIndex = programData.length // Exit loop
@@ -186,7 +211,7 @@ async function processProgramPayouts(programs, hcbClient) {
         for (let i = currentIndex; i < programData.length; i++) {
           const remainingData = programData[i]
           rejected.push(remainingData)
-          console.log(chalk.red(`❌ Rejected: ${remainingData.programName}`))
+          console.log(c.red(`❌ Rejected: ${remainingData.programName}`))
         }
         currentIndex = programData.length // Exit loop
         break
@@ -194,28 +219,28 @@ async function processProgramPayouts(programs, hcbClient) {
   }
 
   // Summary
-  console.log(chalk.blue('\n📊 Summary:'))
-  console.log(chalk.green(`✅ Approved: ${approved.length} programs`))
-  console.log(chalk.red(`❌ Rejected: ${rejected.length} programs`))
+  console.log(c.blue('\n📊 Summary:'))
+  console.log(c.green(`✅ Approved: ${approved.length} programs`))
+  console.log(c.red(`❌ Rejected: ${rejected.length} programs`))
 
   if (approved.length > 0) {
     const totalToTransfer = approved.reduce((sum, data) => sum + data.transferAmount, 0)
-    console.log(chalk.bold(`💰 Total transfer amount: $${totalToTransfer.toFixed(2)}`))
+    console.log(c.bold(`💰 Total transfer amount: $${totalToTransfer.toFixed(2)}`))
 
     // Open transfer tabs for all approved programs with transfer amounts > 0
-    console.log(chalk.blue('\n🌐 Opening transfer pages...'))
+    console.log(c.blue('\n🌐 Opening transfer pages...'))
     for (const data of approved) {
       if (data.org && data.org.eventId && data.transferAmount > 0) {
         await openTransferTab(data.org.eventId, data.transferAmount, data.programName)
       } else if (data.transferAmount <= 0) {
-        console.log(chalk.yellow(`   ⚠️  Skipping ${data.programName}: No transfer needed`))
+        console.log(c.yellow(`   ⚠️  Skipping ${data.programName}: No transfer needed`))
       } else {
-        console.log(chalk.yellow(`   ⚠️  Cannot open transfer for ${data.programName}: ${data.org ? 'No event ID' : 'No HCB org found'}`))
+        console.log(c.yellow(`   ⚠️  Cannot open transfer for ${data.programName}: ${data.org ? 'No event ID' : 'No HCB org found'}`))
       }
     }
     
     // Summary of transfers
-    console.log(chalk.blue('\n📋 Transfer Summary:'))
+    console.log(c.blue('\n📋 Transfer Summary:'))
     approved.forEach(data => {
       const status = (data.org && data.org.eventId && data.transferAmount > 0) ? '✅' : (data.transferAmount <= 0 ? '⏭️' : '❌')
       let statusText
@@ -244,22 +269,22 @@ program
   .option('--program <name>', 'Filter to a specific program by HCB event ID or name')
   .action(async (options) => {
     try {
-      console.log(chalk.blue('🚀 Starting Program Payout workflow...\n'))
+      console.log(c.blue('🚀 Starting Program Payout workflow...\n'))
 
       // Step 1: Authenticate with Airtable
-      console.log(chalk.yellow('📋 Validating Airtable credentials...'))
+      console.log(c.yellow('📋 Validating Airtable credentials...'))
       const airtableAuth = new AirtableAuth()
       const airtableToken = await airtableAuth.authenticate()
-      console.log(chalk.green('✅ Airtable credentials validated\n'))
+      console.log(c.green('✅ Airtable credentials validated\n'))
 
       // Step 2: Authenticate with HCB
-      console.log(chalk.yellow('🏦 Authenticating with HCB...'))
+      console.log(c.yellow('🏦 Authenticating with HCB...'))
       const hcbAuth = new HCBAuth()
       const hcbToken = await hcbAuth.authenticate()
-      console.log(chalk.green('✅ HCB authentication successful\n'))
+      console.log(c.green('✅ HCB authentication successful\n'))
 
       // Step 3: Fetch data from Airtable
-      console.log(chalk.yellow('📊 Fetching programs from Airtable...'))
+      console.log(c.yellow('📊 Fetching programs from Airtable...'))
       const airtableClient = new AirtableClient(airtableToken)
       
       // Build base filter
@@ -269,7 +294,7 @@ program
       if (options.program) {
         const programValue = options.program
         filter = `AND({Weighted–Total} > 0, {Enable payouts} = TRUE(), OR(SEARCH("${programValue}", LOWER({HCB})), SEARCH("${programValue}", LOWER({Name}))))`
-        console.log(chalk.blue(`🔍 Filtering for program matching: "${programValue}"`))
+        console.log(c.blue(`🔍 Filtering for program matching: "${programValue}"`))
       }
       
       let eligiblePrograms
@@ -280,8 +305,8 @@ program
           filter
         )
       } catch (error) {
-        console.log(chalk.yellow('⚠️  "Enable payouts" field not found. Falling back to weighted total filter.'))
-        console.log(chalk.yellow('   Add an "Enable payouts" checkbox field to the Programs table for better control.'))
+        console.log(c.yellow('⚠️  "Enable payouts" field not found. Falling back to weighted total filter.'))
+        console.log(c.yellow('   Add an "Enable payouts" checkbox field to the Programs table for better control.'))
         
         // Fallback filter
         let fallbackFilter = '{Weighted–Total} > 0'
@@ -297,10 +322,10 @@ program
         )
       }
 
-      console.log(chalk.green(`✅ Found ${eligiblePrograms.length} eligible program(s)\n`))
+      console.log(c.green(`✅ Found ${eligiblePrograms.length} eligible program(s)\n`))
 
       if (eligiblePrograms.length === 0) {
-        console.log(chalk.yellow('No programs found matching criteria.'))
+        console.log(c.yellow('No programs found matching criteria.'))
         return
       }
 
@@ -311,7 +336,7 @@ program
       await processProgramPayouts(eligiblePrograms, hcbClient)
 
     } catch (error) {
-      console.error(chalk.red(`❌ Error: ${error.message}`))
+      console.error(c.red(`❌ Error: ${error.message}`))
       process.exit(1)
     } finally {
       process.exit(0)
@@ -324,17 +349,17 @@ program
   .action(async () => {
     let hcbAuth
     try {
-      console.log(chalk.blue('🔐 Testing authentication...\n'))
+      console.log(c.blue('🔐 Testing authentication...\n'))
 
       const airtableAuth = new AirtableAuth()
       await airtableAuth.authenticate()
-      console.log(chalk.green('✅ Airtable credentials validated'))
+      console.log(c.green('✅ Airtable credentials validated'))
 
       hcbAuth = new HCBAuth()
       await hcbAuth.authenticate()
-      console.log(chalk.green('✅ HCB authentication successful'))
+      console.log(c.green('✅ HCB authentication successful'))
     } catch (error) {
-      console.error(chalk.red(`❌ Authentication failed: ${error.message}`))
+      console.error(c.red(`❌ Authentication failed: ${error.message}`))
     } finally {
       // Ensure server is closed
       if (hcbAuth) {

@@ -8,7 +8,7 @@ class HCBClient {
     }
   }
 
-  async getOrgTransactions(eventId, type = 'disbursement') {
+  async getOrgTransactions(eventId, type = 'disbursement', { quiet = false } = {}) {
     try {
       const url = `${this.baseURL}/organizations/${eventId}/transactions`
       const batchSize = 1000
@@ -16,7 +16,7 @@ class HCBClient {
       let cursor = null
       let batchNum = 0
 
-      console.log(`   Fetching transactions with cursor-based pagination...`)
+      if (!quiet) console.log(`   Fetching transactions with cursor-based pagination...`)
 
       while (true) {
         batchNum++
@@ -49,7 +49,7 @@ class HCBClient {
         }
 
         allTransactions.push(...transactions)
-        console.log(`   Batch ${batchNum}: fetched ${transactions.length} (total: ${allTransactions.length})`)
+        if (!quiet) console.log(`   Batch ${batchNum}: fetched ${transactions.length} (total: ${allTransactions.length})`)
 
         // Stop if no more pages
         if (data.has_more === false) {
@@ -60,7 +60,7 @@ class HCBClient {
         cursor = transactions[transactions.length - 1].id
       }
 
-      console.log(`   ✓ Fetched ${allTransactions.length} total transactions`)
+      if (!quiet) console.log(`   ✓ Fetched ${allTransactions.length} total transactions`)
 
       return allTransactions
     } catch (error) {
@@ -85,13 +85,13 @@ class HCBClient {
     }
   }
 
-  async getTotalDisbursementsFromHQ(eventId) {
+  async getTotalDisbursementsFromHQ(eventId, { quiet = false } = {}) {
     try {
       const hqOrgId = 'org_a29uVj' // HQ org ID
       const hqSlug = 'hq' // HQ org slug
 
       // Get ALL transactions for this org (no type filter - we filter for HQ transfers below)
-      const transactions = await this.getOrgTransactions(eventId, null)
+      const transactions = await this.getOrgTransactions(eventId, null, { quiet })
 
       // Deduplicate by transaction ID/code using hashmap to prevent race conditions
       const txMap = new Map()
