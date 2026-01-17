@@ -52,7 +52,9 @@ async function processProgramPayouts(programs, hcbClient) {
 
   // Update progress bar
   const updateProgress = () => {
-    process.stdout.write(`\r${c.cyan(renderProgressBar(completedCount, total))} ${c.gray('Fetching HCB data...')}`)
+    process.stdout.write(
+      `\r${c.cyan(renderProgressBar(completedCount, total))} ${c.gray('Fetching HCB data...')}`
+    )
   }
 
   updateProgress()
@@ -74,7 +76,9 @@ async function processProgramPayouts(programs, hcbClient) {
           org = await hcbClient.getOrgFromBudgetUrl(hcbUrl)
 
           if (org.eventId) {
-            disbursementData = await hcbClient.getTotalDisbursementsFromHQ(org.eventId, { quiet: true })
+            disbursementData = await hcbClient.getTotalDisbursementsFromHQ(org.eventId, {
+              quiet: true,
+            })
           }
         } catch (err) {
           error = err.message
@@ -85,7 +89,8 @@ async function processProgramPayouts(programs, hcbClient) {
       const rawTransferAmountCents = targetAmountCents - disbursementData.totalAmountCents
       const transferAmountCents = Math.max(0, rawTransferAmountCents)
       const transferAmount = transferAmountCents / 100
-      const overDisbursedAmount = rawTransferAmountCents < 0 ? Math.abs(rawTransferAmountCents) / 100 : 0
+      const overDisbursedAmount =
+        rawTransferAmountCents < 0 ? Math.abs(rawTransferAmountCents) / 100 : 0
 
       completedCount++
       updateProgress()
@@ -100,7 +105,7 @@ async function processProgramPayouts(programs, hcbClient) {
         disbursementData,
         transferAmount,
         overDisbursedAmount,
-        error
+        error,
       }
     })
   )
@@ -111,19 +116,35 @@ async function processProgramPayouts(programs, hcbClient) {
 
   while (currentIndex < programData.length) {
     const data = programData[currentIndex]
-    
+
     // Auto-skip $0 transfers and missing HCB URLs
     if (data.transferAmount <= 0 || !data.org || !data.org.eventId) {
       if (data.transferAmount <= 0) {
         if (data.overDisbursedAmount > 0) {
-          console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Over-disbursed by $${data.overDisbursedAmount.toFixed(2)}`))
+          console.log(
+            c.yellow(
+              `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Over-disbursed by $${data.overDisbursedAmount.toFixed(2)}`
+            )
+          )
         } else {
-          console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Already fully disbursed`))
+          console.log(
+            c.yellow(
+              `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Already fully disbursed`
+            )
+          )
         }
       } else if (!data.hcbUrl) {
-        console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB URL`))
+        console.log(
+          c.yellow(
+            `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB URL`
+          )
+        )
       } else if (!data.org || !data.org.eventId) {
-        console.log(c.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB Event ID`))
+        console.log(
+          c.yellow(
+            `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB Event ID`
+          )
+        )
       }
       rejected.push(data)
       currentIndex++
@@ -134,10 +155,12 @@ async function processProgramPayouts(programs, hcbClient) {
     console.log(c.cyan(`\n[${currentIndex + 1}/${programData.length}] ${data.programName}`))
     console.log(`   Weighted Total: ${data.weightedTotal}`)
     console.log(`   Target Amount: $${data.targetAmount.toFixed(2)}`)
-    console.log(`   Total Disbursements from HQ: $${(data.disbursementData.totalAmountCents / 100).toFixed(2)} (${data.disbursementData.disbursementCount} disbursements)`)
+    console.log(
+      `   Total Disbursements from HQ: $${(data.disbursementData.totalAmountCents / 100).toFixed(2)} (${data.disbursementData.disbursementCount} disbursements)`
+    )
     console.log(`   ${c.bold('Transfer Amount: $' + data.transferAmount.toFixed(2))}`)
     console.log(`   HCB URL: ${data.hcbUrl || 'Not found'}`)
-    
+
     if (data.org) {
       console.log(`   HCB Event ID: ${data.org.eventId}`)
     } else if (data.error) {
@@ -148,7 +171,8 @@ async function processProgramPayouts(programs, hcbClient) {
       {
         type: 'input',
         name: 'action',
-        message: 'Approve this program payout? (y)es, (n)o, (a)pprove all, (q)uit/reject all, (?) help:',
+        message:
+          'Approve this program payout? (y)es, (n)o, (a)pprove all, (q)uit/reject all, (?) help:',
         validate: (input) => {
           const validOptions = ['y', 'yes', 'n', 'no', 'a', 'all', 'q', 'quit', '?', 'help']
           if (validOptions.includes(input.toLowerCase().trim())) {
@@ -176,7 +200,11 @@ async function processProgramPayouts(programs, hcbClient) {
       case 'yes':
         approved.push(data)
         if (data.transferAmount > 0) {
-          console.log(c.green(`✅ Approved: Will transfer $${data.transferAmount.toFixed(2)} to ${data.programName}`))
+          console.log(
+            c.green(
+              `✅ Approved: Will transfer $${data.transferAmount.toFixed(2)} to ${data.programName}`
+            )
+          )
         } else {
           console.log(c.green(`✅ Approved: No transfer needed for ${data.programName}`))
         }
@@ -197,7 +225,11 @@ async function processProgramPayouts(programs, hcbClient) {
           const remainingData = programData[i]
           approved.push(remainingData)
           if (remainingData.transferAmount > 0) {
-            console.log(c.green(`✅ Approved: Will transfer $${remainingData.transferAmount.toFixed(2)} to ${remainingData.programName}`))
+            console.log(
+              c.green(
+                `✅ Approved: Will transfer $${remainingData.transferAmount.toFixed(2)} to ${remainingData.programName}`
+              )
+            )
           } else {
             console.log(c.green(`✅ Approved: No transfer needed for ${remainingData.programName}`))
           }
@@ -235,14 +267,23 @@ async function processProgramPayouts(programs, hcbClient) {
       } else if (data.transferAmount <= 0) {
         console.log(c.yellow(`   ⚠️  Skipping ${data.programName}: No transfer needed`))
       } else {
-        console.log(c.yellow(`   ⚠️  Cannot open transfer for ${data.programName}: ${data.org ? 'No event ID' : 'No HCB org found'}`))
+        console.log(
+          c.yellow(
+            `   ⚠️  Cannot open transfer for ${data.programName}: ${data.org ? 'No event ID' : 'No HCB org found'}`
+          )
+        )
       }
     }
-    
+
     // Summary of transfers
     console.log(c.blue('\n📋 Transfer Summary:'))
-    approved.forEach(data => {
-      const status = (data.org && data.org.eventId && data.transferAmount > 0) ? '✅' : (data.transferAmount <= 0 ? '⏭️' : '❌')
+    approved.forEach((data) => {
+      const status =
+        data.org && data.org.eventId && data.transferAmount > 0
+          ? '✅'
+          : data.transferAmount <= 0
+            ? '⏭️'
+            : '❌'
       let statusText
       if (data.overDisbursedAmount > 0) {
         statusText = `(Over-disbursed by $${data.overDisbursedAmount.toFixed(2)})`
@@ -286,37 +327,43 @@ program
       // Step 3: Fetch data from Airtable
       console.log(c.yellow('📊 Fetching programs from Airtable...'))
       const airtableClient = new AirtableClient(airtableToken)
-      
+
       // Build base filter
-      let filter = "AND({Weighted–Total} > 0, {Enable payouts} = TRUE())"
-      
+      let filter = 'AND({Weighted–Total} > 0, {Enable payouts} = TRUE())'
+
       // Add program filter if specified
       if (options.program) {
         const programValue = options.program
         filter = `AND({Weighted–Total} > 0, {Enable payouts} = TRUE(), OR(SEARCH("${programValue}", LOWER({HCB})), SEARCH("${programValue}", LOWER({Name}))))`
         console.log(c.blue(`🔍 Filtering for program matching: "${programValue}"`))
       }
-      
+
       let eligiblePrograms
       try {
         eligiblePrograms = await airtableClient.fetchData(
-          'app3A5kJwYqxMLOgh', 
+          'app3A5kJwYqxMLOgh',
           'tblrGi9RARJy1A0c5',
           filter
         )
       } catch (error) {
-        console.log(c.yellow('⚠️  "Enable payouts" field not found. Falling back to weighted total filter.'))
-        console.log(c.yellow('   Add an "Enable payouts" checkbox field to the Programs table for better control.'))
-        
+        console.log(
+          c.yellow('⚠️  "Enable payouts" field not found. Falling back to weighted total filter.')
+        )
+        console.log(
+          c.yellow(
+            '   Add an "Enable payouts" checkbox field to the Programs table for better control.'
+          )
+        )
+
         // Fallback filter
         let fallbackFilter = '{Weighted–Total} > 0'
         if (options.program) {
           const programValue = options.program
           fallbackFilter = `AND({Weighted–Total} > 0, OR(SEARCH("${programValue}", LOWER({HCB})), SEARCH("${programValue}", LOWER({Name}))))`
         }
-        
+
         eligiblePrograms = await airtableClient.fetchData(
-          'app3A5kJwYqxMLOgh', 
+          'app3A5kJwYqxMLOgh',
           'tblrGi9RARJy1A0c5',
           fallbackFilter
         )
@@ -334,7 +381,6 @@ program
 
       // Step 5: Interactive approval process
       await processProgramPayouts(eligiblePrograms, hcbClient)
-
     } catch (error) {
       console.error(c.red(`❌ Error: ${error.message}`))
       process.exit(1)

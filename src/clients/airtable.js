@@ -23,21 +23,21 @@ class AirtableClient {
       do {
         let url = `${this.baseURL}/${baseId}/${tableId}`
         const params = new URLSearchParams()
-        
+
         // Add filter if provided
         if (filter) {
           params.append('filterByFormula', filter)
         }
-        
+
         // Add offset for pagination
         if (offset) {
           params.append('offset', offset)
         }
-        
+
         if (params.toString()) {
           url += `?${params.toString()}`
         }
-        
+
         const response = await fetch(url, { headers: this.headers })
 
         if (!response.ok) {
@@ -51,13 +51,12 @@ class AirtableClient {
 
         const data = await response.json()
         const records = data.records || []
-        
+
         // Add records to our collection
         allRecords = allRecords.concat(records)
-        
+
         // Check if there are more pages
         offset = data.offset
-        
       } while (offset)
 
       // Transform records to a more usable format

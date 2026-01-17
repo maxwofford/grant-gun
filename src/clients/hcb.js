@@ -49,7 +49,10 @@ class HCBClient {
         }
 
         allTransactions.push(...transactions)
-        if (!quiet) console.log(`   Batch ${batchNum}: fetched ${transactions.length} (total: ${allTransactions.length})`)
+        if (!quiet)
+          console.log(
+            `   Batch ${batchNum}: fetched ${transactions.length} (total: ${allTransactions.length})`
+          )
 
         // Stop if no more pages
         if (data.has_more === false) {
@@ -107,9 +110,9 @@ class HCBClient {
       const hqDisbursements = uniqueTransactions.filter(
         (tx) =>
           (tx.transfer?.from?.slug === hqSlug ||
-          tx.transfer?.from?.id === hqOrgId ||
-          (tx.memo && tx.memo.includes('HQ'))) &&
-          (!tx.labels || !tx.labels.some(label => label.name === 'no-grant-calc'))
+            tx.transfer?.from?.id === hqOrgId ||
+            (tx.memo && tx.memo.includes('HQ'))) &&
+          (!tx.labels || !tx.labels.some((label) => label.name === 'no-grant-calc'))
       )
 
       // Sum up all disbursement amounts in cents (integer math)
