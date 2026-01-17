@@ -63,9 +63,11 @@ async function processProgramPayouts(programs, hcbClient) {
     }
     
     const targetAmountCents = Math.round(targetAmount * 100)
-    const transferAmountCents = Math.max(0, targetAmountCents - disbursementData.totalAmountCents)
+    const rawTransferAmountCents = targetAmountCents - disbursementData.totalAmountCents
+    const transferAmountCents = Math.max(0, rawTransferAmountCents)
     const transferAmount = transferAmountCents / 100
-    
+    const overDisbursedAmount = rawTransferAmountCents < 0 ? Math.abs(rawTransferAmountCents) / 100 : 0
+
     programData.push({
       program,
       programName,
@@ -75,6 +77,7 @@ async function processProgramPayouts(programs, hcbClient) {
       org,
       disbursementData,
       transferAmount,
+      overDisbursedAmount,
       error
     })
   }
@@ -87,7 +90,11 @@ async function processProgramPayouts(programs, hcbClient) {
     // Auto-skip $0 transfers and missing HCB URLs
     if (data.transferAmount <= 0 || !data.org || !data.org.eventId) {
       if (data.transferAmount <= 0) {
-        console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: $0 transfer (already fully disbursed or over-disbursed)`))
+        if (data.overDisbursedAmount > 0) {
+          console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Over-disbursed by $${data.overDisbursedAmount.toFixed(2)}`))
+        } else {
+          console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Already fully disbursed`))
+        }
       } else if (!data.hcbUrl) {
         console.log(chalk.yellow(`⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB URL`))
       } else if (!data.org || !data.org.eventId) {
@@ -211,7 +218,16 @@ async function processProgramPayouts(programs, hcbClient) {
     console.log(chalk.blue('\n📋 Transfer Summary:'))
     approved.forEach(data => {
       const status = (data.org && data.org.eventId && data.transferAmount > 0) ? '✅' : (data.transferAmount <= 0 ? '⏭️' : '❌')
-      const statusText = data.transferAmount <= 0 ? '(No transfer needed)' : (data.org ? `(Event: ${data.org.eventId})` : '(No HCB event)')
+      let statusText
+      if (data.overDisbursedAmount > 0) {
+        statusText = `(Over-disbursed by $${data.overDisbursedAmount.toFixed(2)})`
+      } else if (data.transferAmount <= 0) {
+        statusText = '(Fully disbursed)'
+      } else if (data.org) {
+        statusText = `(Event: ${data.org.eventId})`
+      } else {
+        statusText = '(No HCB event)'
+      }
       console.log(`${status} ${data.programName}: $${data.transferAmount.toFixed(2)} ${statusText}`)
     })
   }
