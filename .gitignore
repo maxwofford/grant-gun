@@ -71,3 +71,6 @@ ehthumbs.db
 # Temporary files
 temp/
 tmp/
+
+# Debug files
+debug-*.json

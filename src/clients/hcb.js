@@ -104,25 +104,27 @@ class HCBClient {
 
       const uniqueTransactions = Array.from(txMap.values())
 
-      // Filter for disbursements from HQ
-      // Check nested transfer.from.slug or transfer.from.id
+      // Filter for all transfers involving HQ (either direction)
       // Exclude transactions with 'no-grant-calc' label
-      const hqDisbursements = uniqueTransactions.filter(
+      const hqTransfers = uniqueTransactions.filter(
         (tx) =>
-          (tx.transfer?.from?.slug === hqSlug || tx.transfer?.from?.id === hqOrgId) &&
+          (tx.transfer?.from?.slug === hqSlug ||
+            tx.transfer?.from?.id === hqOrgId ||
+            tx.transfer?.to?.slug === hqSlug ||
+            tx.transfer?.to?.id === hqOrgId) &&
           (!tx.labels || !tx.labels.some((label) => label.name === 'no-grant-calc'))
       )
 
-      // Sum up all disbursement amounts in cents (integer math)
-      const totalDisbursedCents = hqDisbursements.reduce((sum, tx) => {
+      // Sum up all transfer amounts in cents (positive = received, negative = returned)
+      const totalDisbursedCents = hqTransfers.reduce((sum, tx) => {
         const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
-        return sum + Math.abs(amountCents)
+        return sum + amountCents
       }, 0)
 
       return {
         totalAmountCents: totalDisbursedCents,
-        disbursementCount: hqDisbursements.length,
-        disbursements: hqDisbursements,
+        disbursementCount: hqTransfers.length,
+        disbursements: hqTransfers,
       }
     } catch (error) {
       throw new Error(`Failed to get disbursements from HQ: ${error.message}`)

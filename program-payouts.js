@@ -36,9 +36,13 @@ function renderProgressBar(completed, total, width = 30) {
   return `[${bar}] ${completed}/${total}`
 }
 
-async function processProgramPayouts(programs, hcbClient) {
+async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {}) {
   console.log(c.blue('💰 Program Payout Process'))
-  console.log(c.gray('Review each program for payout approval. Use ? for help.\n'))
+  if (dryRun) {
+    console.log(c.yellow('🔍 Dry run mode - showing calculations only\n'))
+  } else {
+    console.log(c.gray('Review each program for payout approval. Use ? for help.\n'))
+  }
 
   const approved = []
   const rejected = []
@@ -167,6 +171,12 @@ async function processProgramPayouts(programs, hcbClient) {
       console.log(c.red(`   HCB Error: ${data.error}`))
     }
 
+    // In dry-run mode, just show the data and continue
+    if (dryRun) {
+      currentIndex++
+      continue
+    }
+
     const { action } = await inquirer.prompt([
       {
         type: 'input',
@@ -252,6 +262,13 @@ async function processProgramPayouts(programs, hcbClient) {
 
   // Summary
   console.log(c.blue('\n📊 Summary:'))
+  if (dryRun) {
+    const programsNeedingTransfer = programData.filter((d) => d.transferAmount > 0 && d.org?.eventId)
+    const totalToTransfer = programsNeedingTransfer.reduce((sum, d) => sum + d.transferAmount, 0)
+    console.log(`Programs needing transfer: ${programsNeedingTransfer.length}`)
+    console.log(`Total transfer amount: $${totalToTransfer.toFixed(2)}`)
+    return
+  }
   console.log(c.green(`✅ Approved: ${approved.length} programs`))
   console.log(c.red(`❌ Rejected: ${rejected.length} programs`))
 
@@ -308,6 +325,7 @@ program
   .command('run')
   .description('Process program payouts with approval workflow')
   .option('--program <name>', 'Filter to a specific program by HCB event ID or name')
+  .option('--dry-run', 'Show calculations without interactive prompts or opening browser tabs')
   .action(async (options) => {
     try {
       console.log(c.blue('🚀 Starting Program Payout workflow...\n'))
@@ -379,8 +397,8 @@ program
       // Step 4: Initialize HCB client
       const hcbClient = new HCBClient(hcbToken)
 
-      // Step 5: Interactive approval process
-      await processProgramPayouts(eligiblePrograms, hcbClient)
+      // Step 5: Interactive approval process (or dry-run)
+      await processProgramPayouts(eligiblePrograms, hcbClient, { dryRun: options.dryRun })
     } catch (error) {
       console.error(c.red(`❌ Error: ${error.message}`))
       process.exit(1)

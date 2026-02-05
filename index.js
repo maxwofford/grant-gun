@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 
 const { Command } = require('commander')
-const chalk = require('chalk')
 const inquirer = require('inquirer')
 const open = require('open')
 const { AirtableAuth } = require('./src/auth/airtable')
 const { HCBAuth } = require('./src/auth/hcb')
 const { AirtableClient } = require('./src/clients/airtable')
 const { HCBClient } = require('./src/clients/hcb')
+const c = require('./src/lib/colors')
 
 const program = new Command()
 
@@ -17,20 +17,20 @@ async function openDisbursementTab(eventId, transferAmount, recipientName) {
   const amountInCents = (transferAmount * 100).toFixed(0) // Convert to cents, no decimals
   const url = `https://hcb.hackclub.com/disbursements/new?source_event_id=hq&event_id=${eventId}&amount=${amountInCents}&message=${encodeURIComponent(message)}`
 
-  console.log(chalk.blue(`   🌐 Opening disbursement tab: ${url}`))
+  console.log(c.blue(`   🌐 Opening disbursement tab: ${url}`))
 
   try {
     await open(url)
-    console.log(chalk.green(`   ✅ Opened disbursement page for ${recipientName}`))
+    console.log(c.green(`   ✅ Opened disbursement page for ${recipientName}`))
   } catch (error) {
-    console.log(chalk.red(`   ❌ Failed to open browser: ${error.message}`))
-    console.log(chalk.blue(`   Please manually visit: ${url}`))
+    console.log(c.red(`   ❌ Failed to open browser: ${error.message}`))
+    console.log(c.blue(`   Please manually visit: ${url}`))
   }
 }
 
 async function processGrantApprovals(orgData) {
-  console.log(chalk.blue('📋 Grant Approval Process'))
-  console.log(chalk.gray('Review each grant for approval. Use ? for help.\n'))
+  console.log(c.blue('📋 Grant Approval Process'))
+  console.log(c.gray('Review each grant for approval. Use ? for help.\n'))
 
   const approved = []
   const rejected = []
@@ -42,22 +42,20 @@ async function processGrantApprovals(orgData) {
     const orgName = org.org.slug ? org.org.slug.replace('ysws-budget-', '') : org.name
 
     // Display org information
-    console.log(chalk.cyan(`\n[${currentIndex + 1}/${orgData.length}] ${org.name}`))
+    console.log(c.cyan(`\n[${currentIndex + 1}/${orgData.length}] ${org.name}`))
     console.log(`   HCB Event ID: ${org.org.eventId || 'Unknown'}`)
     console.log(`   USD for Weighted Grants: $${org.formattedAmount}`)
     console.log(
       `   Total Disbursements from HQ: $${org.disbursementData.totalAmount.toFixed(2)} (${org.disbursementData.disbursementCount} disbursements)`
     )
-    console.log(`   ${chalk.bold('Transfer Amount: $' + transferAmount.toFixed(2))}`)
+    console.log(`   ${c.bold('Transfer Amount: $' + transferAmount.toFixed(2))}`)
 
     if (org.error) {
-      console.log(chalk.red(`   Error: ${org.error}`))
+      console.log(c.red(`   Error: ${org.error}`))
     }
 
     if (transferAmount <= 0) {
-      console.log(
-        chalk.yellow(`   ⚠️  No transfer needed (already fully disbursed or over-disbursed)`)
-      )
+      console.log(c.yellow(`   ⚠️  No transfer needed (already fully disbursed or over-disbursed)`))
     }
 
     const { action } = await inquirer.prompt([
@@ -80,7 +78,7 @@ async function processGrantApprovals(orgData) {
     switch (choice) {
       case '?':
       case 'help':
-        console.log(chalk.blue('\nAvailable commands:'))
+        console.log(c.blue('\nAvailable commands:'))
         console.log('  y, yes     - Approve this grant and continue')
         console.log('  n, no      - Reject this grant and continue')
         console.log('  a, all     - Approve this grant and all remaining grants')
@@ -93,10 +91,10 @@ async function processGrantApprovals(orgData) {
         approved.push(org)
         if (transferAmount > 0) {
           console.log(
-            chalk.green(`✅ Approved: Will transfer $${transferAmount.toFixed(2)} to ${orgName}`)
+            c.green(`✅ Approved: Will transfer $${transferAmount.toFixed(2)} to ${orgName}`)
           )
         } else {
-          console.log(chalk.green(`✅ Approved: No transfer needed for ${orgName}`))
+          console.log(c.green(`✅ Approved: No transfer needed for ${orgName}`))
         }
         currentIndex++
         break
@@ -104,7 +102,7 @@ async function processGrantApprovals(orgData) {
       case 'n':
       case 'no':
         rejected.push(org)
-        console.log(chalk.red(`❌ Rejected: ${orgName}`))
+        console.log(c.red(`❌ Rejected: ${orgName}`))
         currentIndex++
         break
 
@@ -122,12 +120,12 @@ async function processGrantApprovals(orgData) {
           approved.push(remainingOrg)
           if (remainingTransferAmount > 0) {
             console.log(
-              chalk.green(
+              c.green(
                 `✅ Approved: Will transfer $${remainingTransferAmount.toFixed(2)} to ${remainingOrgName}`
               )
             )
           } else {
-            console.log(chalk.green(`✅ Approved: No transfer needed for ${remainingOrgName}`))
+            console.log(c.green(`✅ Approved: No transfer needed for ${remainingOrgName}`))
           }
         }
         currentIndex = orgData.length // Exit loop
@@ -142,7 +140,7 @@ async function processGrantApprovals(orgData) {
             ? remainingOrg.org.slug.replace('ysws-budget-', '')
             : remainingOrg.name
           rejected.push(remainingOrg)
-          console.log(chalk.red(`❌ Rejected: ${remainingOrgName}`))
+          console.log(c.red(`❌ Rejected: ${remainingOrgName}`))
         }
         currentIndex = orgData.length // Exit loop
         break
@@ -150,9 +148,9 @@ async function processGrantApprovals(orgData) {
   }
 
   // Summary
-  console.log(chalk.blue('\n📊 Summary:'))
-  console.log(chalk.green(`✅ Approved: ${approved.length} grants`))
-  console.log(chalk.red(`❌ Rejected: ${rejected.length} grants`))
+  console.log(c.blue('\n📊 Summary:'))
+  console.log(c.green(`✅ Approved: ${approved.length} grants`))
+  console.log(c.red(`❌ Rejected: ${rejected.length} grants`))
 
   if (approved.length > 0) {
     const totalToTransfer = approved.reduce((sum, org) => {
@@ -162,10 +160,10 @@ async function processGrantApprovals(orgData) {
       )
       return sum + transferAmount
     }, 0)
-    console.log(chalk.bold(`💰 Total transfer amount: $${totalToTransfer.toFixed(2)}`))
+    console.log(c.bold(`💰 Total transfer amount: $${totalToTransfer.toFixed(2)}`))
 
     // Open disbursement tabs for all approved grants with transfer amounts > 0
-    console.log(chalk.blue('\n🌐 Opening disbursement pages...'))
+    console.log(c.blue('\n🌐 Opening disbursement pages...'))
     for (const org of approved) {
       const transferAmount = org.weightedGrantsAmount - org.disbursementData.totalAmount
       const orgName = org.org.slug ? org.org.slug.replace('ysws-budget-', '') : org.name
@@ -187,22 +185,22 @@ program
   .description('Execute the grant workflow: auth, fetch data, and display records')
   .action(async () => {
     try {
-      console.log(chalk.blue('🚀 Starting Grant Gun workflow...\n'))
+      console.log(c.blue('🚀 Starting Grant Gun workflow...\n'))
 
       // Step 1: Authenticate with Airtable
-      console.log(chalk.yellow('📋 Validating Airtable credentials...'))
+      console.log(c.yellow('📋 Validating Airtable credentials...'))
       const airtableAuth = new AirtableAuth()
       const airtableToken = await airtableAuth.authenticate()
-      console.log(chalk.green('✅ Airtable credentials validated\n'))
+      console.log(c.green('✅ Airtable credentials validated\n'))
 
       // Step 2: Authenticate with HCB
-      console.log(chalk.yellow('🏦 Authenticating with HCB...'))
+      console.log(c.yellow('🏦 Authenticating with HCB...'))
       const hcbAuth = new HCBAuth()
       const hcbToken = await hcbAuth.authenticate()
-      console.log(chalk.green('✅ HCB authentication successful\n'))
+      console.log(c.green('✅ HCB authentication successful\n'))
 
       // Step 3: Fetch data from Airtable
-      console.log(chalk.yellow('📊 Fetching data from Airtable...'))
+      console.log(c.yellow('📊 Fetching data from Airtable...'))
       const airtableClient = new AirtableClient(airtableToken)
       const allRecords = await airtableClient.fetchData()
 
@@ -212,15 +210,15 @@ program
           record.fields['HCB Budget Fund'] && record.fields['HCB Budget Fund'].trim() !== ''
       )
 
-      console.log(chalk.green(`✅ Found ${validRecords.length} records with HCB Budget Fund\n`))
+      console.log(c.green(`✅ Found ${validRecords.length} records with HCB Budget Fund\n`))
 
       if (validRecords.length === 0) {
-        console.log(chalk.yellow('No records found with HCB Budget Fund values.'))
+        console.log(c.yellow('No records found with HCB Budget Fund values.'))
         return
       }
 
       // Step 4: Initialize HCB client to query transfer data
-      console.log(chalk.yellow('💰 Querying HCB transfer history...'))
+      console.log(c.yellow('💰 Querying HCB transfer history...'))
       const hcbClient = new HCBClient(hcbToken)
 
       // Collect all org data first
@@ -262,12 +260,12 @@ program
         }
       }
 
-      console.log(chalk.green(`✅ Transfer history query complete\n`))
+      console.log(c.green(`✅ Transfer history query complete\n`))
 
       // Interactive approval process
       await processGrantApprovals(orgData)
     } catch (error) {
-      console.error(chalk.red(`❌ Error: ${error.message}`))
+      console.error(c.red(`❌ Error: ${error.message}`))
       process.exit(1)
     } finally {
       process.exit(0)
@@ -280,17 +278,17 @@ program
   .action(async () => {
     let hcbAuth
     try {
-      console.log(chalk.blue('🔐 Testing authentication...\n'))
+      console.log(c.blue('🔐 Testing authentication...\n'))
 
       const airtableAuth = new AirtableAuth()
       await airtableAuth.authenticate()
-      console.log(chalk.green('✅ Airtable credentials validated'))
+      console.log(c.green('✅ Airtable credentials validated'))
 
       hcbAuth = new HCBAuth()
       await hcbAuth.authenticate()
-      console.log(chalk.green('✅ HCB authentication successful'))
+      console.log(c.green('✅ HCB authentication successful'))
     } catch (error) {
-      console.error(chalk.red(`❌ Authentication failed: ${error.message}`))
+      console.error(c.red(`❌ Authentication failed: ${error.message}`))
     } finally {
       // Ensure server is closed
       if (hcbAuth) {
