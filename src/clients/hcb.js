@@ -8,10 +8,24 @@ class HCBClient {
     }
   }
 
+  async fetchWithRetry(url, options, { retries = 5, quiet = false } = {}) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      const response = await fetch(url, options)
+      if (response.ok) return response
+      if (attempt < retries) {
+        const delay = 2000 * Math.pow(2, attempt - 1) // 2s, 4s, 8s, 16s
+        if (!quiet) console.log(`   Request failed (${response.status}), retrying in ${delay / 1000}s (${attempt}/${retries - 1})...`)
+        await new Promise((r) => setTimeout(r, delay))
+      } else {
+        throw new Error(`${response.status} - ${response.statusText}`)
+      }
+    }
+  }
+
   async getOrgTransactions(eventId, type = 'disbursement', { quiet = false } = {}) {
     try {
       const url = `${this.baseURL}/organizations/${eventId}/transactions`
-      const batchSize = 1000
+      const batchSize = 100
       const allTransactions = []
       let cursor = null
       let batchNum = 0
@@ -29,13 +43,9 @@ class HCBClient {
           params.append('after', cursor)
         }
 
-        const response = await fetch(`${url}?${params.toString()}`, {
+        const response = await this.fetchWithRetry(`${url}?${params.toString()}`, {
           headers: this.headers,
-        })
-
-        if (!response.ok) {
-          throw new Error(`${response.status} - ${response.statusText}`)
-        }
+        }, { quiet })
 
         const data = await response.json()
 
@@ -46,6 +56,8 @@ class HCBClient {
           transactions = data
         } else if (data && data.transactions && Array.isArray(data.transactions)) {
           transactions = data.transactions
+        } else {
+          throw new Error(`Unexpected response shape from HCB API (got ${typeof data}, keys: ${data ? Object.keys(data).join(', ') : 'null'})`)
         }
 
         allTransactions.push(...transactions)
@@ -88,44 +100,70 @@ class HCBClient {
     }
   }
 
-  async getTotalDisbursementsFromHQ(eventId, { quiet = false } = {}) {
+  _computeHQDisbursements(transactions) {
+    const hqOrgId = 'org_a29uVj' // HQ org ID
+    const hqSlug = 'hq' // HQ org slug
+
+    // Deduplicate by transaction ID
+    const txMap = new Map()
+    for (const tx of transactions) {
+      txMap.set(tx.id, tx)
+    }
+    const uniqueTransactions = Array.from(txMap.values())
+
+    // Filter for all transfers involving HQ (either direction)
+    // Exclude transactions with 'no-grant-calc' label
+    const hqTransfers = uniqueTransactions.filter(
+      (tx) =>
+        (tx.transfer?.from?.slug === hqSlug ||
+          tx.transfer?.from?.id === hqOrgId ||
+          tx.transfer?.to?.slug === hqSlug ||
+          tx.transfer?.to?.id === hqOrgId) &&
+        (!tx.labels || !tx.labels.some((label) => label.name === 'no-grant-calc'))
+    )
+
+    // Sum up all transfer amounts in cents (positive = received, negative = returned)
+    const totalAmountCents = hqTransfers.reduce((sum, tx) => {
+      const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
+      return sum + amountCents
+    }, 0)
+
+    return { totalAmountCents, disbursementCount: hqTransfers.length, disbursements: hqTransfers }
+  }
+
+  async getOrgBalance(eventId, { quiet = false } = {}) {
+    const response = await this.fetchWithRetry(
+      `${this.baseURL}/organizations/${eventId}`,
+      { headers: this.headers },
+      { quiet }
+    )
+    const data = await response.json()
+    return data.balance_cents
+  }
+
+  async getTotalDisbursementsFromHQ(eventId, { quiet = false, maxAttempts = 3 } = {}) {
     try {
-      const hqOrgId = 'org_a29uVj' // HQ org ID
-      const hqSlug = 'hq' // HQ org slug
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const balanceCents = await this.getOrgBalance(eventId, { quiet })
+        const transactions = await this.getOrgTransactions(eventId, null, { quiet })
 
-      // Get ALL transactions for this org (no type filter - we filter for HQ transfers below)
-      const transactions = await this.getOrgTransactions(eventId, null, { quiet })
+        // Verify pagination completeness: sum of all transactions should equal balance
+        const computedBalanceCents = transactions.reduce((sum, tx) => {
+          const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
+          return sum + amountCents
+        }, 0)
 
-      // Deduplicate by transaction ID/code using hashmap to prevent race conditions
-      const txMap = new Map()
-      for (const tx of transactions) {
-        txMap.set(tx.id, tx)
+        if (computedBalanceCents === balanceCents) {
+          if (!quiet) console.log(`   ✓ Balance verified: $${(balanceCents / 100).toFixed(2)}`)
+          return this._computeHQDisbursements(transactions)
+        }
+
+        if (!quiet) {
+          console.log(`   ⚠ Balance mismatch for ${eventId} (attempt ${attempt}/${maxAttempts}): API says $${(balanceCents / 100).toFixed(2)}, transactions sum to $${(computedBalanceCents / 100).toFixed(2)}`)
+        }
       }
 
-      const uniqueTransactions = Array.from(txMap.values())
-
-      // Filter for all transfers involving HQ (either direction)
-      // Exclude transactions with 'no-grant-calc' label
-      const hqTransfers = uniqueTransactions.filter(
-        (tx) =>
-          (tx.transfer?.from?.slug === hqSlug ||
-            tx.transfer?.from?.id === hqOrgId ||
-            tx.transfer?.to?.slug === hqSlug ||
-            tx.transfer?.to?.id === hqOrgId) &&
-          (!tx.labels || !tx.labels.some((label) => label.name === 'no-grant-calc'))
-      )
-
-      // Sum up all transfer amounts in cents (positive = received, negative = returned)
-      const totalDisbursedCents = hqTransfers.reduce((sum, tx) => {
-        const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
-        return sum + amountCents
-      }, 0)
-
-      return {
-        totalAmountCents: totalDisbursedCents,
-        disbursementCount: hqTransfers.length,
-        disbursements: hqTransfers,
-      }
+      throw new Error(`Transaction data for ${eventId} failed balance verification after ${maxAttempts} attempts — skipping to avoid incorrect calculations`)
     } catch (error) {
       throw new Error(`Failed to get disbursements from HQ: ${error.message}`)
     }
