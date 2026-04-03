@@ -72,7 +72,7 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
       const hcbUrl = program.fields['HCB']
 
       let org = null
-      let disbursementData = { totalAmountCents: 0, disbursementCount: 0 }
+      let disbursementData = null
       let error = null
 
       if (hcbUrl) {
@@ -90,7 +90,7 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
       }
 
       const targetAmountCents = Math.round(targetAmount * 100)
-      const rawTransferAmountCents = targetAmountCents - disbursementData.totalAmountCents
+      const rawTransferAmountCents = targetAmountCents - (disbursementData?.totalAmountCents || 0)
       const transferAmountCents = Math.max(0, rawTransferAmountCents)
       const transferAmount = transferAmountCents / 100
       const overDisbursedAmount =
@@ -106,10 +106,11 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
         targetAmount,
         hcbUrl,
         org,
-        disbursementData,
+        disbursementData: disbursementData || { totalAmountCents: 0, disbursementCount: 0 },
         transferAmount,
         overDisbursedAmount,
         error,
+        stale: !disbursementData,
       }
     })
   )
@@ -118,11 +119,31 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
   process.stdout.write('\r' + ' '.repeat(80) + '\r')
   console.log(c.green(`✅ Transfer history query complete (${total} programs)\n`))
 
+  const staleCount = programData.filter((d) => d.stale).length
+  if (staleCount > 0) {
+    console.log(c.red(`⚠ ${staleCount} program(s) failed to fetch HCB data — their amounts may be wrong`))
+    if (dryRun) {
+      console.log(c.red(`  Consider re-running when HCB is stable\n`))
+    } else {
+      console.log(c.red(`  They will be auto-rejected — re-run when HCB is stable\n`))
+    }
+  }
+
   while (currentIndex < programData.length) {
     const data = programData[currentIndex]
 
-    // Auto-skip $0 transfers and missing HCB URLs
-    if (data.transferAmount <= 0 || !data.org || !data.org.eventId) {
+    // Auto-skip programs we can't or shouldn't transfer to
+    if (!dryRun && (data.stale || data.transferAmount <= 0 || !data.org || !data.org.eventId)) {
+      if (data.stale) {
+        console.log(
+          c.red(
+            `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: HCB data unavailable — can't calculate safely`
+          )
+        )
+        rejected.push(data)
+        currentIndex++
+        continue
+      }
       if (data.transferAmount <= 0) {
         if (data.overDisbursedAmount > 0) {
           console.log(
@@ -162,10 +183,16 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
     console.log(
       `   Total Disbursements from HQ: $${(data.disbursementData.totalAmountCents / 100).toFixed(2)} (${data.disbursementData.disbursementCount} disbursements)`
     )
-    console.log(`   ${c.bold('Transfer Amount: $' + data.transferAmount.toFixed(2))}`)
+    if (data.overDisbursedAmount > 0) {
+      console.log(`   ${c.yellow('Over-disbursed by: $' + data.overDisbursedAmount.toFixed(2))}`)
+    } else {
+      console.log(`   ${c.bold('Transfer Amount: $' + data.transferAmount.toFixed(2))}`)
+    }
     console.log(`   HCB URL: ${data.hcbUrl || 'Not found'}`)
 
-    if (data.org) {
+    if (data.stale) {
+      console.log(c.red(`   ⚠ HCB data unavailable — amounts are unreliable (${data.error || 'unknown error'})`))
+    } else if (data.org) {
       console.log(`   HCB Event ID: ${data.org.eventId}`)
     } else if (data.error) {
       console.log(c.red(`   HCB Error: ${data.error}`))
@@ -263,9 +290,20 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
   // Summary
   console.log(c.blue('\n📊 Summary:'))
   if (dryRun) {
+    const stalePrograms = programData.filter((d) => d.stale)
     const programsNeedingTransfer = programData.filter((d) => d.transferAmount > 0 && d.org?.eventId)
+    const programsFullyDisbursed = programData.filter((d) => d.transferAmount <= 0 && d.overDisbursedAmount <= 0)
+    const programsOverDisbursed = programData.filter((d) => d.overDisbursedAmount > 0)
     const totalToTransfer = programsNeedingTransfer.reduce((sum, d) => sum + d.transferAmount, 0)
+    const totalOverDisbursed = programsOverDisbursed.reduce((sum, d) => sum + d.overDisbursedAmount, 0)
+    if (stalePrograms.length > 0) {
+      console.log(c.red(`\n⚠ ${stalePrograms.length} program(s) failed to fetch HCB data — their amounts are unreliable`))
+      console.log(c.red(`  Re-run when HCB is stable before acting on these numbers\n`))
+    }
+    console.log(`Total programs: ${programData.length}`)
     console.log(`Programs needing transfer: ${programsNeedingTransfer.length}`)
+    console.log(`Programs fully disbursed: ${programsFullyDisbursed.length}`)
+    console.log(`Programs over-disbursed: ${programsOverDisbursed.length} ($${totalOverDisbursed.toFixed(2)} total)`)
     console.log(`Total transfer amount: $${totalToTransfer.toFixed(2)}`)
     return
   }
@@ -326,6 +364,7 @@ program
   .description('Process program payouts with approval workflow')
   .option('--program <name>', 'Filter to a specific program by HCB event ID or name')
   .option('--dry-run', 'Show calculations without interactive prompts or opening browser tabs')
+  .option('--cache-auth', 'Cache OAuth tokens to skip re-authentication on subsequent runs')
   .action(async (options) => {
     try {
       console.log(c.blue('🚀 Starting Program Payout workflow...\n'))
@@ -338,7 +377,7 @@ program
 
       // Step 2: Authenticate with HCB
       console.log(c.yellow('🏦 Authenticating with HCB...'))
-      const hcbAuth = new HCBAuth()
+      const hcbAuth = new HCBAuth({ cacheAuth: options.cacheAuth })
       const hcbToken = await hcbAuth.authenticate()
       console.log(c.green('✅ HCB authentication successful\n'))
 
@@ -347,12 +386,12 @@ program
       const airtableClient = new AirtableClient(airtableToken)
 
       // Build base filter
-      let filter = 'AND({Weighted–Total} > 0, {Enable payouts} = TRUE())'
+      let filter = 'AND({Weighted–Total} > 0, {Enable payouts} = TRUE(), {HCB} != "")'
 
       // Add program filter if specified
       if (options.program) {
         const programValue = options.program
-        filter = `AND({Weighted–Total} > 0, {Enable payouts} = TRUE(), OR(SEARCH("${programValue}", LOWER({HCB})), SEARCH("${programValue}", LOWER({Name}))))`
+        filter = `AND({Weighted–Total} > 0, {Enable payouts} = TRUE(), {HCB} != "", OR(SEARCH("${programValue}", LOWER({HCB})), SEARCH("${programValue}", LOWER({Name}))))`
         console.log(c.blue(`🔍 Filtering for program matching: "${programValue}"`))
       }
 
@@ -374,10 +413,10 @@ program
         )
 
         // Fallback filter
-        let fallbackFilter = '{Weighted–Total} > 0'
+        let fallbackFilter = 'AND({Weighted–Total} > 0, {HCB} != "")'
         if (options.program) {
           const programValue = options.program
-          fallbackFilter = `AND({Weighted–Total} > 0, OR(SEARCH("${programValue}", LOWER({HCB})), SEARCH("${programValue}", LOWER({Name}))))`
+          fallbackFilter = `AND({Weighted–Total} > 0, {HCB} != "", OR(SEARCH("${programValue}", LOWER({HCB})), SEARCH("${programValue}", LOWER({Name}))))`
         }
 
         eligiblePrograms = await airtableClient.fetchData(
