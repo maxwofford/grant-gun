@@ -100,37 +100,6 @@ class HCBClient {
     }
   }
 
-  _computeHQDisbursements(transactions) {
-    const hqOrgId = 'org_a29uVj' // HQ org ID
-    const hqSlug = 'hq' // HQ org slug
-
-    // Deduplicate by transaction ID
-    const txMap = new Map()
-    for (const tx of transactions) {
-      txMap.set(tx.id, tx)
-    }
-    const uniqueTransactions = Array.from(txMap.values())
-
-    // Filter for all transfers involving HQ (either direction)
-    // Exclude transactions with 'no-grant-calc' label
-    const hqTransfers = uniqueTransactions.filter(
-      (tx) =>
-        (tx.transfer?.from?.slug === hqSlug ||
-          tx.transfer?.from?.id === hqOrgId ||
-          tx.transfer?.to?.slug === hqSlug ||
-          tx.transfer?.to?.id === hqOrgId) &&
-        (!tx.labels || !tx.labels.some((label) => label.name === 'no-grant-calc'))
-    )
-
-    // Sum up all transfer amounts in cents (positive = received, negative = returned)
-    const totalAmountCents = hqTransfers.reduce((sum, tx) => {
-      const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
-      return sum + amountCents
-    }, 0)
-
-    return { totalAmountCents, disbursementCount: hqTransfers.length, disbursements: hqTransfers }
-  }
-
   async getOrgBalance(eventId, { quiet = false } = {}) {
     const response = await this.fetchWithRetry(
       `${this.baseURL}/organizations/${eventId}`,
@@ -141,33 +110,62 @@ class HCBClient {
     return data.balance_cents
   }
 
-  async getTotalDisbursementsFromHQ(eventId, { quiet = false, maxAttempts = 3 } = {}) {
-    try {
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const balanceCents = await this.getOrgBalance(eventId, { quiet })
-        const transactions = await this.getOrgTransactions(eventId, null, { quiet })
-
-        // Verify pagination completeness: sum of all transactions should equal balance
-        const computedBalanceCents = transactions.reduce((sum, tx) => {
-          const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
-          return sum + amountCents
-        }, 0)
-
-        if (computedBalanceCents === balanceCents) {
-          if (!quiet) console.log(`   ✓ Balance verified: $${(balanceCents / 100).toFixed(2)}`)
-          return this._computeHQDisbursements(transactions)
-        }
-
-        if (!quiet) {
-          console.log(`   ⚠ Balance mismatch for ${eventId} (attempt ${attempt}/${maxAttempts}): API says $${(balanceCents / 100).toFixed(2)}, transactions sum to $${(computedBalanceCents / 100).toFixed(2)}`)
-        }
-      }
-
-      throw new Error(`Transaction data for ${eventId} failed balance verification after ${maxAttempts} attempts — skipping to avoid incorrect calculations`)
-    } catch (error) {
-      throw new Error(`Failed to get disbursements from HQ: ${error.message}`)
-    }
-  }
 }
 
-module.exports = { HCBClient }
+async function downloadTransactions(hcbClient, eventId, { quiet = false, maxAttempts = 3 } = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const balanceCents = await hcbClient.getOrgBalance(eventId, { quiet })
+    const transactions = await hcbClient.getOrgTransactions(eventId, null, { quiet })
+
+    const computedBalanceCents = transactions.reduce((sum, tx) => {
+      const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
+      return sum + amountCents
+    }, 0)
+
+    if (computedBalanceCents === balanceCents) {
+      if (!quiet) console.log(`   ✓ Balance verified: $${(balanceCents / 100).toFixed(2)}`)
+      return transactions
+    }
+
+    if (!quiet) {
+      console.log(
+        `   ⚠ Balance mismatch for ${eventId} (attempt ${attempt}/${maxAttempts}): API says $${(balanceCents / 100).toFixed(2)}, transactions sum to $${(computedBalanceCents / 100).toFixed(2)}`
+      )
+    }
+  }
+
+  throw new Error(
+    `Transaction data for ${eventId} failed balance verification after ${maxAttempts} attempts`
+  )
+}
+
+function balanceBetweenOrgs(transactions, otherOrgSlugOrId) {
+  const txMap = new Map()
+  for (const tx of transactions) {
+    txMap.set(tx.id, tx)
+  }
+  const uniqueTransactions = Array.from(txMap.values())
+
+  const relevantTransfers = uniqueTransactions.filter((tx) => {
+    const from = tx.transfer?.from
+    const to = tx.transfer?.to
+    const matchesOther =
+      from?.slug === otherOrgSlugOrId ||
+      from?.id === otherOrgSlugOrId ||
+      to?.slug === otherOrgSlugOrId ||
+      to?.id === otherOrgSlugOrId
+
+    const excluded = tx.labels?.some((label) => label.name === 'no-grant-calc')
+
+    return matchesOther && !excluded
+  })
+
+  const totalAmountCents = relevantTransfers.reduce((sum, tx) => {
+    const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
+    return sum + amountCents
+  }, 0)
+
+  return { totalAmountCents, transferCount: relevantTransfers.length, transfers: relevantTransfers }
+}
+
+module.exports = { HCBClient, downloadTransactions, balanceBetweenOrgs }

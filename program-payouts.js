@@ -6,8 +6,10 @@ const open = require('open')
 const { AirtableAuth } = require('./src/auth/airtable')
 const { HCBAuth } = require('./src/auth/hcb')
 const { AirtableClient } = require('./src/clients/airtable')
-const { HCBClient } = require('./src/clients/hcb')
+const { HCBClient, downloadTransactions, balanceBetweenOrgs } = require('./src/clients/hcb')
 const c = require('./src/lib/colors')
+
+const HQ_SLUG = 'hq'
 
 const program = new Command()
 
@@ -72,17 +74,19 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
       const hcbUrl = program.fields['HCB']
 
       let org = null
-      let disbursementData = null
+      let transferBalance = null
       let error = null
+      let fetchDurationMs = 0
 
       if (hcbUrl) {
         try {
           org = await hcbClient.getOrgFromBudgetUrl(hcbUrl)
 
           if (org.eventId) {
-            disbursementData = await hcbClient.getTotalDisbursementsFromHQ(org.eventId, {
-              quiet: true,
-            })
+            const start = Date.now()
+            const transactions = await downloadTransactions(hcbClient, org.eventId, { quiet: true })
+            fetchDurationMs = Date.now() - start
+            transferBalance = balanceBetweenOrgs(transactions, HQ_SLUG)
           }
         } catch (err) {
           error = err.message
@@ -90,7 +94,7 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
       }
 
       const targetAmountCents = Math.round(targetAmount * 100)
-      const rawTransferAmountCents = targetAmountCents - (disbursementData?.totalAmountCents || 0)
+      const rawTransferAmountCents = targetAmountCents - (transferBalance?.totalAmountCents || 0)
       const transferAmountCents = Math.max(0, rawTransferAmountCents)
       const transferAmount = transferAmountCents / 100
       const overDisbursedAmount =
@@ -106,11 +110,12 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
         targetAmount,
         hcbUrl,
         org,
-        disbursementData: disbursementData || { totalAmountCents: 0, disbursementCount: 0 },
+        disbursementData: transferBalance || { totalAmountCents: 0, transferCount: 0 },
         transferAmount,
         overDisbursedAmount,
+        fetchDurationMs,
         error,
-        stale: !disbursementData,
+        stale: !transferBalance,
       }
     })
   )
@@ -118,6 +123,16 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
   // Clear progress line and show completion
   process.stdout.write('\r' + ' '.repeat(80) + '\r')
   console.log(c.green(`✅ Transfer history query complete (${total} programs)\n`))
+
+  // Print fetch times sorted slowest first
+  const sorted = [...programData].sort((a, b) => b.fetchDurationMs - a.fetchDurationMs)
+  console.log(c.gray('⏱  Fetch times:'))
+  for (const d of sorted) {
+    const secs = (d.fetchDurationMs / 1000).toFixed(1)
+    const color = d.fetchDurationMs > 60000 ? c.red : d.fetchDurationMs > 10000 ? c.yellow : c.gray
+    console.log(color(`   ${secs}s  ${d.programName}`))
+  }
+  console.log()
 
   const staleCount = programData.filter((d) => d.stale).length
   if (staleCount > 0) {
@@ -181,7 +196,7 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
     console.log(`   Weighted Total: ${data.weightedTotal}`)
     console.log(`   Target Amount: $${data.targetAmount.toFixed(2)}`)
     console.log(
-      `   Total Disbursements from HQ: $${(data.disbursementData.totalAmountCents / 100).toFixed(2)} (${data.disbursementData.disbursementCount} disbursements)`
+      `   Total Disbursements from HQ: $${(data.disbursementData.totalAmountCents / 100).toFixed(2)} (${data.disbursementData.transferCount} transfers)`
     )
     if (data.overDisbursedAmount > 0) {
       console.log(`   ${c.yellow('Over-disbursed by: $' + data.overDisbursedAmount.toFixed(2))}`)

@@ -6,8 +6,6 @@
 
 ```bash
 bun install
-cp .env.example .env
-# Edit .env with your OAuth credentials
 ```
 
 ### Run Commands
@@ -36,7 +34,6 @@ bun test                   # Run tests (when implemented)
 
 - Use async/await for asynchronous operations
 - Include comprehensive error handling with descriptive messages
-- Store OAuth tokens in local files (`.airtable-token`, `.hcb-token`)
 - Use environment variables for configuration
 - Follow modular architecture with separation of concerns
 - Include user confirmation for destructive operations (transfers)

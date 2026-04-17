@@ -2,14 +2,11 @@
   "name": "grant-gun",
   "version": "1.0.0",
   "description": "CLI tool for OAuth with Airtable and HCB, data synchronization, and automated transfers",
-  "main": "index.js",
-  "bin": {
-    "grant-gun": "./index.js"
-  },
+  "main": "program-payouts.js",
   "scripts": {
-    "start": "bun index.js run",
-    "dev": "bun index.js run",
-    "auth": "bun index.js auth",
+    "program-payouts": "bun program-payouts.js run",
+    "referral-payouts": "bun referral-payouts.js run",
+    "fine-payouts": "bun fine-payouts.js run",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
