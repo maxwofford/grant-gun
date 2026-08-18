@@ -66,35 +66,30 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
   updateProgress()
 
   // Process all programs in parallel
-  const programData = await Promise.all(
+  const results = await Promise.allSettled(
     programs.map(async (program) => {
       const programName = program.fields['Name'] || 'Unknown Program'
       const weightedTotal = program.fields['Weighted–Total'] || 0
       const targetAmount = weightedTotal * 85 // Each weighted grant is $85
       const hcbUrl = program.fields['HCB']
 
-      let org = null
-      let transferBalance = null
-      let error = null
-      let fetchDurationMs = 0
-
-      if (hcbUrl) {
-        try {
-          org = await hcbClient.getOrgFromBudgetUrl(hcbUrl)
-
-          if (org.eventId) {
-            const start = Date.now()
-            const transactions = await downloadTransactions(hcbClient, org.eventId, { quiet: true })
-            fetchDurationMs = Date.now() - start
-            transferBalance = balanceBetweenOrgs(transactions, HQ_SLUG)
-          }
-        } catch (err) {
-          error = err.message
-        }
+      if (!hcbUrl) {
+        throw new Error(`${programName}: missing HCB URL — can't calculate payout`)
       }
 
+      const org = await hcbClient.getOrgFromBudgetUrl(hcbUrl)
+
+      if (!org.eventId) {
+        throw new Error(`${programName}: no HCB event ID found from URL ${hcbUrl}`)
+      }
+
+      const start = Date.now()
+      const transactions = await downloadTransactions(hcbClient, org.eventId, { quiet: true })
+      const fetchDurationMs = Date.now() - start
+      const transferBalance = balanceBetweenOrgs(transactions, HQ_SLUG)
+
       const targetAmountCents = Math.round(targetAmount * 100)
-      const rawTransferAmountCents = targetAmountCents - (transferBalance?.totalAmountCents || 0)
+      const rawTransferAmountCents = targetAmountCents - transferBalance.totalAmountCents
       const transferAmountCents = Math.max(0, rawTransferAmountCents)
       const transferAmount = transferAmountCents / 100
       const overDisbursedAmount =
@@ -110,15 +105,28 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
         targetAmount,
         hcbUrl,
         org,
-        disbursementData: transferBalance || { totalAmountCents: 0, transferCount: 0 },
+        disbursementData: transferBalance,
         transferAmount,
         overDisbursedAmount,
         fetchDurationMs,
-        error,
-        stale: !transferBalance,
       }
     })
   )
+
+  // Fail loudly if ANY program couldn't be fetched
+  const failures = results
+    .filter((r) => r.status === 'rejected')
+    .map((r) => r.reason.message)
+  if (failures.length > 0) {
+    process.stdout.write('\r' + ' '.repeat(80) + '\r')
+    console.log(c.red(`\n❌ ${failures.length} program(s) failed to fetch HCB data:\n`))
+    for (const msg of failures) {
+      console.log(c.red(`   • ${msg}`))
+    }
+    throw new Error(`Cannot proceed — failed to fetch data for ${failures.length} program(s)`)
+  }
+
+  const programData = results.map((r) => r.value)
 
   // Clear progress line and show completion
   process.stdout.write('\r' + ' '.repeat(80) + '\r')
@@ -134,31 +142,11 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
   }
   console.log()
 
-  const staleCount = programData.filter((d) => d.stale).length
-  if (staleCount > 0) {
-    console.log(c.red(`⚠ ${staleCount} program(s) failed to fetch HCB data — their amounts may be wrong`))
-    if (dryRun) {
-      console.log(c.red(`  Consider re-running when HCB is stable\n`))
-    } else {
-      console.log(c.red(`  They will be auto-rejected — re-run when HCB is stable\n`))
-    }
-  }
-
   while (currentIndex < programData.length) {
     const data = programData[currentIndex]
 
     // Auto-skip programs we can't or shouldn't transfer to
-    if (!dryRun && (data.stale || data.transferAmount <= 0 || !data.org || !data.org.eventId)) {
-      if (data.stale) {
-        console.log(
-          c.red(
-            `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: HCB data unavailable — can't calculate safely`
-          )
-        )
-        rejected.push(data)
-        currentIndex++
-        continue
-      }
+    if (!dryRun && (data.transferAmount <= 0 || !data.org || !data.org.eventId)) {
       if (data.transferAmount <= 0) {
         if (data.overDisbursedAmount > 0) {
           console.log(
@@ -173,18 +161,6 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
             )
           )
         }
-      } else if (!data.hcbUrl) {
-        console.log(
-          c.yellow(
-            `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB URL`
-          )
-        )
-      } else if (!data.org || !data.org.eventId) {
-        console.log(
-          c.yellow(
-            `⏭️  Skipping [${currentIndex + 1}/${programData.length}] ${data.programName}: Missing HCB Event ID`
-          )
-        )
       }
       rejected.push(data)
       currentIndex++
@@ -203,15 +179,8 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
     } else {
       console.log(`   ${c.bold('Transfer Amount: $' + data.transferAmount.toFixed(2))}`)
     }
-    console.log(`   HCB URL: ${data.hcbUrl || 'Not found'}`)
-
-    if (data.stale) {
-      console.log(c.red(`   ⚠ HCB data unavailable — amounts are unreliable (${data.error || 'unknown error'})`))
-    } else if (data.org) {
-      console.log(`   HCB Event ID: ${data.org.eventId}`)
-    } else if (data.error) {
-      console.log(c.red(`   HCB Error: ${data.error}`))
-    }
+    console.log(`   HCB URL: ${data.hcbUrl}`)
+    console.log(`   HCB Event ID: ${data.org.eventId}`)
 
     // In dry-run mode, just show the data and continue
     if (dryRun) {
@@ -305,16 +274,11 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
   // Summary
   console.log(c.blue('\n📊 Summary:'))
   if (dryRun) {
-    const stalePrograms = programData.filter((d) => d.stale)
-    const programsNeedingTransfer = programData.filter((d) => d.transferAmount > 0 && d.org?.eventId)
+    const programsNeedingTransfer = programData.filter((d) => d.transferAmount > 0)
     const programsFullyDisbursed = programData.filter((d) => d.transferAmount <= 0 && d.overDisbursedAmount <= 0)
     const programsOverDisbursed = programData.filter((d) => d.overDisbursedAmount > 0)
     const totalToTransfer = programsNeedingTransfer.reduce((sum, d) => sum + d.transferAmount, 0)
     const totalOverDisbursed = programsOverDisbursed.reduce((sum, d) => sum + d.overDisbursedAmount, 0)
-    if (stalePrograms.length > 0) {
-      console.log(c.red(`\n⚠ ${stalePrograms.length} program(s) failed to fetch HCB data — their amounts are unreliable`))
-      console.log(c.red(`  Re-run when HCB is stable before acting on these numbers\n`))
-    }
     console.log(`Total programs: ${programData.length}`)
     console.log(`Programs needing transfer: ${programsNeedingTransfer.length}`)
     console.log(`Programs fully disbursed: ${programsFullyDisbursed.length}`)
