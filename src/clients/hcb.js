@@ -12,6 +12,9 @@ class HCBClient {
     for (let attempt = 1; attempt <= retries; attempt++) {
       const response = await fetch(url, options)
       if (response.ok) return response
+      if (response.status === 401 || response.status === 403 || response.status === 404) {
+        throw new Error(`${response.status} - ${response.statusText} (no access to this org: ${url})`)
+      }
       if (attempt < retries) {
         const delay = 2000 * Math.pow(2, attempt - 1) // 2s, 4s, 8s, 16s
         if (!quiet) console.log(`   Request failed (${response.status}), retrying in ${delay / 1000}s (${attempt}/${retries - 1})...`)
