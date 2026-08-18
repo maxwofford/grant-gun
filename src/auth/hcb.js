@@ -70,7 +70,7 @@ class HCBAuth {
         `client_id=${this.clientId}&` +
         `redirect_uri=${encodeURIComponent(this.redirectUri)}&` +
         `response_type=code&` +
-        `scope=read`
+        `scope=admin:read`
 
       // Open browser
       console.log('Opening browser for HCB authentication...')
