@@ -1,3 +1,6 @@
+const fs = require('fs')
+const path = require('path')
+
 class HCBClient {
   constructor(token) {
     this.token = token
@@ -115,24 +118,61 @@ class HCBClient {
 
 }
 
+const CACHE_DIR = path.join(__dirname, '..', '..', '.cache', 'hcb')
+
+function sumTransactionsCents(transactions) {
+  return transactions.reduce((sum, tx) => {
+    const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
+    return sum + amountCents
+  }, 0)
+}
+
+function readCache(eventId) {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(CACHE_DIR, `${eventId}.json`), 'utf8'))
+    return data.transactions
+  } catch {
+    return null
+  }
+}
+
+function writeCache(eventId, transactions) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true })
+  fs.writeFileSync(
+    path.join(CACHE_DIR, `${eventId}.json`),
+    JSON.stringify({ transactions }, null, 2)
+  )
+}
+
 async function downloadTransactions(hcbClient, eventId, { quiet = false, maxAttempts = 3 } = {}) {
+  const balanceCents = await hcbClient.getOrgBalance(eventId, { quiet })
+
+  const cached = readCache(eventId)
+  if (cached) {
+    const cachedSum = sumTransactionsCents(cached)
+    if (cachedSum === balanceCents) {
+      if (!quiet) console.log(`   ✓ Balance verified from cache: $${(balanceCents / 100).toFixed(2)} (${cached.length} transactions)`)
+      return cached
+    }
+    if (!quiet) console.log(`   Cache stale for ${eventId} (balance changed), re-fetching...`)
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const balanceCents = await hcbClient.getOrgBalance(eventId, { quiet })
+    const currentBalance = attempt === 1
+      ? balanceCents
+      : await hcbClient.getOrgBalance(eventId, { quiet })
     const transactions = await hcbClient.getOrgTransactions(eventId, null, { quiet })
+    const computedBalanceCents = sumTransactionsCents(transactions)
 
-    const computedBalanceCents = transactions.reduce((sum, tx) => {
-      const amountCents = tx.amount_cents ? tx.amount_cents : Math.round((tx.amount || 0) * 100)
-      return sum + amountCents
-    }, 0)
-
-    if (computedBalanceCents === balanceCents) {
-      if (!quiet) console.log(`   ✓ Balance verified: $${(balanceCents / 100).toFixed(2)}`)
+    if (computedBalanceCents === currentBalance) {
+      if (!quiet) console.log(`   ✓ Balance verified: $${(currentBalance / 100).toFixed(2)}`)
+      writeCache(eventId, transactions)
       return transactions
     }
 
     if (!quiet) {
       console.log(
-        `   ⚠ Balance mismatch for ${eventId} (attempt ${attempt}/${maxAttempts}): API says $${(balanceCents / 100).toFixed(2)}, transactions sum to $${(computedBalanceCents / 100).toFixed(2)}`
+        `   ⚠ Balance mismatch for ${eventId} (attempt ${attempt}/${maxAttempts}): API says $${(currentBalance / 100).toFixed(2)}, transactions sum to $${(computedBalanceCents / 100).toFixed(2)}`
       )
     }
   }
