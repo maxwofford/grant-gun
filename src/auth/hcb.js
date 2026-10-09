@@ -1,16 +1,82 @@
 const open = require('open')
+const fs = require('fs')
+const path = require('path')
+
+const TOKEN_CACHE_PATH = path.join(__dirname, '..', '..', '.cache', 'hcb-token.json')
 
 class HCBAuth {
-  constructor() {
+  constructor({ cacheAuth = false } = {}) {
     this.clientId = process.env.HCB_APP_UID
     this.clientSecret = process.env.HCB_APP_SECRET
     this.redirectUri = process.env.HCB_REDIRECT_URI || 'http://localhost:3000'
     this.baseURL = 'https://hcb.hackclub.com/api/v4'
-    this.server = null // Store server reference
+    this.server = null
+    this.cacheAuth = cacheAuth
   }
 
   async authenticate() {
-    // Always start fresh OAuth flow - no token storage
+    if (this.cacheAuth) {
+      const cached = this._readCachedToken()
+      if (cached) {
+        const valid = await this.validateToken(cached)
+        if (valid) {
+          console.log('Using cached HCB token')
+          return cached
+        }
+        if (cached.refresh_token) {
+          console.log('Cached HCB token expired, refreshing...')
+          try {
+            const refreshed = await this._refreshToken(cached.refresh_token)
+            this._writeCachedToken(refreshed)
+            console.log('Using refreshed HCB token')
+            return refreshed
+          } catch {
+            console.log('Refresh failed, re-authenticating...')
+          }
+        } else {
+          console.log('Cached HCB token expired, re-authenticating...')
+        }
+      }
+    }
+
+    const token = await this._oauthFlow()
+
+    if (this.cacheAuth) {
+      this._writeCachedToken(token)
+    }
+
+    return token
+  }
+
+  async _refreshToken(refreshToken) {
+    const response = await fetch(`${this.baseURL}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token',
+      }),
+    })
+    if (!response.ok) throw new Error(`Refresh failed: ${response.status}`)
+    return response.json()
+  }
+
+  _readCachedToken() {
+    try {
+      return JSON.parse(fs.readFileSync(TOKEN_CACHE_PATH, 'utf8'))
+    } catch {
+      return null
+    }
+  }
+
+  _writeCachedToken(token) {
+    fs.mkdirSync(path.dirname(TOKEN_CACHE_PATH), { recursive: true })
+    fs.writeFileSync(TOKEN_CACHE_PATH, JSON.stringify(token, null, 2))
+  }
+
+  async _oauthFlow() {
     return new Promise((resolve, reject) => {
       let timeoutId
 
@@ -43,7 +109,6 @@ class HCBAuth {
               })
 
               const token = await tokenResponse.json()
-              // Don't save token - always authenticate fresh
 
               clearTimeout(timeoutId)
               resolve(token)
