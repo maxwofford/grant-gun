@@ -12,6 +12,8 @@ class HCBAuth {
   async authenticate() {
     // Always start fresh OAuth flow - no token storage
     return new Promise((resolve, reject) => {
+      let timeoutId
+
       this.server = Bun.serve({
         port: 3000,
         fetch: async (req) => {
@@ -43,16 +45,18 @@ class HCBAuth {
               const token = await tokenResponse.json()
               // Don't save token - always authenticate fresh
 
-              this.server.stop()
+              clearTimeout(timeoutId)
               resolve(token)
+              setTimeout(() => this.closeServer(), 500)
 
               return new Response(
                 '<h1>✅ HCB authentication successful!</h1><p>You can close this window.</p>',
                 { headers: { 'Content-Type': 'text/html' } }
               )
             } catch (error) {
-              this.server.stop()
+              clearTimeout(timeoutId)
               reject(error)
+              setTimeout(() => this.closeServer(), 500)
 
               return new Response(`<h1>❌ Authentication failed</h1><p>${error.message}</p>`, {
                 headers: { 'Content-Type': 'text/html' },
@@ -83,8 +87,8 @@ class HCBAuth {
       }
 
       // Timeout after 5 minutes
-      setTimeout(() => {
-        this.server.stop()
+      timeoutId = setTimeout(() => {
+        this.closeServer()
         reject(new Error('Authentication timeout'))
       }, 300000)
     })
@@ -105,7 +109,7 @@ class HCBAuth {
 
   closeServer() {
     if (this.server) {
-      this.server.stop()
+      this.server.stop(true)
       this.server = null
     }
   }
