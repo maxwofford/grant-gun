@@ -113,7 +113,7 @@ class HCBClient {
       { quiet }
     )
     const data = await response.json()
-    return data.balance_cents
+    return data.balance_cents + (data.fee_balance_cents || 0)
   }
 
 }
