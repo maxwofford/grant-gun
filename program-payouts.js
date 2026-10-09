@@ -55,11 +55,14 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
 
   let completedCount = 0
   const total = programs.length
+  const pending = new Set()
 
-  // Update progress bar
   const updateProgress = () => {
+    const pendingNames = [...pending].join(', ')
+    const status = pending.size > 0 ? `Waiting on: ${pendingNames}` : 'Fetching HCB data...'
+    process.stdout.clearLine?.(0)
     process.stdout.write(
-      `\r${c.cyan(renderProgressBar(completedCount, total))} ${c.gray('Fetching HCB data...')}`
+      `\r${c.cyan(renderProgressBar(completedCount, total))} ${c.gray(status)}`
     )
   }
 
@@ -83,8 +86,18 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
         throw new Error(`${programName}: no HCB event ID found from URL ${hcbUrl}`)
       }
 
+      pending.add(programName)
+      updateProgress()
+
       const start = Date.now()
-      const transactions = await downloadTransactions(hcbClient, org.eventId, { quiet: true })
+      let transactions
+      try {
+        transactions = await downloadTransactions(hcbClient, org.eventId, { quiet: true })
+      } catch (err) {
+        throw new Error(`${programName}: ${err.message}`)
+      } finally {
+        pending.delete(programName)
+      }
       const fetchDurationMs = Date.now() - start
       const transferBalance = balanceBetweenOrgs(transactions, HQ_SLUG)
 
@@ -113,7 +126,6 @@ async function processProgramPayouts(programs, hcbClient, { dryRun = false } = {
     })
   )
 
-  // Fail loudly if ANY program couldn't be fetched
   const failures = results
     .filter((r) => r.status === 'rejected')
     .map((r) => r.reason.message)
