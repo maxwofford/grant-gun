@@ -13,7 +13,15 @@ class HCBClient {
 
   async fetchWithRetry(url, options, { retries = 5, quiet = false } = {}) {
     for (let attempt = 1; attempt <= retries; attempt++) {
-      const response = await fetch(url, options)
+      let response
+      try {
+        response = await fetch(url, { signal: AbortSignal.timeout(120_000), ...options })
+      } catch (err) {
+        if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+          throw new Error('The operation timed out.')
+        }
+        throw err
+      }
       if (response.ok) return response
       if (response.status === 401 || response.status === 403 || response.status === 404) {
         throw new Error(`${response.status} - ${response.statusText} (no access to this org: ${url})`)
@@ -145,10 +153,9 @@ function writeCache(eventId, transactions) {
 }
 
 async function downloadTransactions(hcbClient, eventId, { quiet = false, maxAttempts = 3 } = {}) {
-  const balanceCents = await hcbClient.getOrgBalance(eventId, { quiet })
-
   const cached = readCache(eventId)
   if (cached) {
+    const balanceCents = await hcbClient.getOrgBalance(eventId, { quiet })
     const cachedSum = sumTransactionsCents(cached)
     if (cachedSum === balanceCents) {
       if (!quiet) console.log(`   ✓ Balance verified from cache: $${(balanceCents / 100).toFixed(2)} (${cached.length} transactions)`)
@@ -158,9 +165,7 @@ async function downloadTransactions(hcbClient, eventId, { quiet = false, maxAtte
   }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const currentBalance = attempt === 1
-      ? balanceCents
-      : await hcbClient.getOrgBalance(eventId, { quiet })
+    const currentBalance = await hcbClient.getOrgBalance(eventId, { quiet })
     const transactions = await hcbClient.getOrgTransactions(eventId, null, { quiet })
     const computedBalanceCents = sumTransactionsCents(transactions)
 
